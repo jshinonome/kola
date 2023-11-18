@@ -185,7 +185,11 @@ impl Q {
             };
 
             if self.enable_tls {
-                let connector = TlsConnector::new().unwrap();
+                let connector = TlsConnector::builder()
+                    .danger_accept_invalid_certs(true)
+                    .danger_accept_invalid_hostnames(true)
+                    .build()
+                    .unwrap();
                 let mut tls_stream = match connector.connect(&socket, tcp_stream) {
                     Ok(stream) => stream,
                     Err(e) => {
