@@ -28,40 +28,40 @@ defaults:
     shell: bash
 
 jobs:
-  create-sdist:
-    runs-on: ubuntu-20.04
-    strategy:
-      fail-fast: false
-      matrix:
-        package: [kola]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.sha }}
+  # create-sdist:
+  #   runs-on: ubuntu-20.04
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       package: [kola]
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ inputs.sha }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+  #     - name: Set up Python
+  #       uses: actions/setup-python@v4
+  #       with:
+  #         python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: >
-            --manifest-path py-kola/Cargo.toml
-            --out dist
+  #     - name: Build wheels
+  #       uses: PyO3/maturin-action@v1
+  #       with:
+  #         command: sdist
+  #         args: >
+  #           --manifest-path py-kola/Cargo.toml
+  #           --out dist
 
-      - name: Test sdist
-        run: |
-          pip install --force-reinstall --verbose dist/*.tar.gz
-          python -c 'import kola'
+  #     - name: Test sdist
+  #       run: |
+  #         pip install --force-reinstall --verbose dist/*.tar.gz
+  #         python -c 'import kola'
 
-      - name: Upload sdist
-        uses: actions/upload-artifact@v3
-        with:
-          name: sdist
-          path: dist/*.tar.gz
+  #     - name: Upload sdist
+  #       uses: actions/upload-artifact@v3
+  #       with:
+  #         name: sdist
+  #         path: dist/*.tar.gz
 
   build-wheels:
     runs-on: ${{ matrix.os }}
@@ -69,8 +69,8 @@ jobs:
       fail-fast: false
       matrix:
         package: [kola]
-        # os: [ubuntu-20.04, macos-latest, windows-32gb-ram]
-        os: [ubuntu-20.04]
+        os: [ubuntu-20.04, macos-latest, windows-32gb-ram]
+        # os: [ubuntu-20.04]
         # manylinux aarch64 openssl doesn't work
         # architecture: [x86-64, aarch64]
         architecture: [x86-64]
@@ -133,7 +133,8 @@ jobs:
           path: dist/*.whl
 
   publish-to-pypi:
-    needs: [create-sdist, build-wheels]
+    # needs: [create-sdist, build-wheels]
+    needs: [build-wheels]
     environment:
       name: release-python
       url: https://pypi.org/project/kola
