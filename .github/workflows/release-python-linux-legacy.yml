@@ -1,4 +1,4 @@
-name: Kola Python
+name: Kola Python Legacy
 
 on:
   workflow_dispatch:
@@ -65,22 +65,14 @@ jobs:
 
   build-wheels:
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.windows }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-20.04, macos-latest]
-        # os: [ubuntu-20.04, macos-latest]
+        os: [ubuntu-20.04]
         # manylinux aarch64 openssl doesn't work
         # architecture: [x86-64, aarch64]
         architecture: [x86-64]
-        python-version: ["3.11", "3.12"]
-        windows: [false]
-        include:
-          - os: windows-latest
-            architecture: x86-64
-            python-version: "3.11"
-            windows: true
+        python-version: ["3.8", "3.9", "3.10"]
 
     steps:
       - uses: actions/checkout@v4
