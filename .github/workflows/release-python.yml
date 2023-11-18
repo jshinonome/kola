@@ -65,19 +65,21 @@ jobs:
 
   build-wheels:
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.windows }}
     strategy:
       fail-fast: false
       matrix:
-        package: [kola]
-        os: [ubuntu-20.04, macos-latest, windows-32gb-ram]
-        # os: [ubuntu-20.04]
+        os: [ubuntu-20.04, macos-latest]
+        # os: [ubuntu-20.04, macos-latest]
         # manylinux aarch64 openssl doesn't work
         # architecture: [x86-64, aarch64]
         architecture: [x86-64]
         python-version: ["3.10", "3.11", "3.12"]
-        exclude:
-          - os: windows-32gb-ram
-            architecture: aarch64
+        windows: [false]
+        include:
+          - os: windows-latest
+            architecture: [x86-64]
+            windows: true
 
     steps:
       - uses: actions/checkout@v4
@@ -88,10 +90,6 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Update package name
-        if: matrix.package != 'kola'
-        run: tomlq -i -t ".project.name = \"${{ matrix.package }}\"" py-kola/pyproject.toml
 
       - name: Set RUSTFLAGS for x86-64
         if: matrix.architecture == 'x86-64' && matrix.os != 'macos-latest'
