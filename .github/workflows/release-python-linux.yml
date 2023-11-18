@@ -1,4 +1,4 @@
-name: Kola Python Latest
+name: Kola Python Linux
 
 on:
   workflow_dispatch:

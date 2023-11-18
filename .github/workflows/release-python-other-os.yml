@@ -1,4 +1,4 @@
-name: Kola Python Latest
+name: Kola Python Other OS
 
 on:
   workflow_dispatch:
