@@ -1,4 +1,4 @@
-use polars_arrow::datatypes::DataType;
+use polars_arrow::datatypes::ArrowDataType;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -46,13 +46,13 @@ pub enum KolaError {
     NotSupportedKMixedListErr(u8, u8),
 
     #[error("Not supported arrow type {0:?}.")]
-    NotSupportedArrowTypeErr(DataType),
+    NotSupportedArrowTypeErr(ArrowDataType),
 
     #[error("Not supported series type {0:?}.")]
     NotSupportedSeriesTypeErr(polars_core::datatypes::DataType),
 
     #[error("Not supported nested list type {0:?}.")]
-    NotSupportedArrowNestedListTypeErr(DataType),
+    NotSupportedArrowNestedListTypeErr(ArrowDataType),
 
     #[error("Not supported polars nested list type {0:?}.")]
     NotSupportedPolarsNestedListTypeErr(polars_core::datatypes::DataType),

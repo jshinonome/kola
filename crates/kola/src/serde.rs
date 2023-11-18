@@ -5,7 +5,7 @@ use polars_arrow::array::{
 };
 use polars_arrow::bitmap::Bitmap;
 use polars_arrow::buffer::Buffer;
-use polars_arrow::datatypes::{DataType as ArrowDataType, Field, TimeUnit};
+use polars_arrow::datatypes::{ArrowDataType, Field, TimeUnit};
 use polars_arrow::{array::Utf8Array, offset::OffsetsBuffer};
 use polars_core::chunked_array::ops::{ChunkFillNullValue, FillNullStrategy};
 use polars_core::datatypes::{DataType as PolarsDataType, TimeUnit as PolarTimeUnit};

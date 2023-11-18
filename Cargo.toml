@@ -15,3 +15,7 @@ opt-level = 1
 
 [profile.release]
 opt-level = 3
+
+[workspace.dependencies]
+polars-core = { version = "0.35.2" }
+polars-arrow = { version = "0.35.2", default-features = false }

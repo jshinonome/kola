@@ -10,7 +10,7 @@ crate-type = ["lib"]
 [dependencies]
 native-tls = "0.2.11"
 chrono = "0.4.31"
-polars-arrow = { version = "0.34.2", default-features = false }
+polars-arrow = { workspace = true }
 thiserror = "1.0.50"
 rayon = "1.8.0"
 
@@ -23,7 +23,7 @@ features = [
 ]
 
 [dependencies.polars-core]
-version = "0.35.2"
+workspace = true
 features = [
   "dtype-categorical",
   "dtype-array",
