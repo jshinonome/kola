@@ -1,0 +1,4 @@
+polars
+pyarrow
+maturin
+pytest

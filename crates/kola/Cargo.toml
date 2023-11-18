@@ -1,0 +1,36 @@
+[package]
+name = "kola"
+version.workspace = true
+edition = "2021"
+
+[lib]
+name = "kola"
+crate-type = ["lib"]
+
+[dependencies]
+native-tls = "0.2.11"
+chrono = "0.4.31"
+polars-arrow = { version = "0.34.2", default-features = false }
+thiserror = "1.0.50"
+rayon = "1.8.0"
+
+[dependencies.uuid]
+version = "1.5.0"
+features = [
+  "v4",                # Lets you generate random UUIDs
+  "fast-rng",          # Use a faster (but still sufficiently random) RNG
+  "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
+
+[dependencies.polars-core]
+version = "0.34.2"
+features = [
+  "dtype-categorical",
+  "dtype-array",
+  "dtype-duration",
+  "dtype-u8",
+  "dtype-i16",
+  "dtype-datetime",
+  "dtype-date",
+  "dtype-time",
+]

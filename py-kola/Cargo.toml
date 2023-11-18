@@ -1,0 +1,33 @@
+[package]
+name = "py-kola"
+version.workspace = true
+edition = "2021"
+
+[lib]
+name = "kola"
+crate-type = ["cdylib"]
+
+[dependencies]
+kola = { path = "../crates/kola" }
+pyo3 = { version = "0.20.0", features = ["extension-module", "chrono"] }
+thiserror = "1.0.50"
+polars-core = { version = "0.34.2", default-features = false }
+pyo3-polars = "0.8.0"
+chrono = "0.4.31"
+
+[profile.opt-dev]
+strip = "symbols"
+inherits = "dev"
+opt-level = 1
+
+[profile.debug-release]
+inherits = "release"
+debug = true
+incremental = true
+codegen-units = 16
+lto = "thin"
+
+[profile.release]
+strip = "symbols"
+codegen-units = 1
+lto = "fat"

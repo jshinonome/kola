@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "py-kola"]
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.2.0"
+authors = ["Jo Shinonome <jo.shinonome@gmail.com>"]
+edition = "2021"
+repository = "https://github.com/jshinonome/kola"
+license = "BSD-3-Clause license"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3

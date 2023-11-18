@@ -1,0 +1,10 @@
+.idea
+.vscode
+target
+*.pyc
+*.so
+Cargo.lock
+test.ipynb
+bmk
+.venv
+.pytest_cache
