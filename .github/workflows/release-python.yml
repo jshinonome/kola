@@ -78,8 +78,8 @@ jobs:
         windows: [false]
         include:
           - os: windows-latest
-            architecture: [x86-64]
-            python-version: ["3.10", "3.11", "3.12"]
+            architecture: x86-64
+            python-version: "3.11"
             windows: true
 
     steps:
@@ -142,11 +142,11 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download sdist
-        uses: actions/download-artifact@v3
-        with:
-          name: sdist
-          path: dist
+      # - name: Download sdist
+      #   uses: actions/download-artifact@v3
+      #   with:
+      #     name: sdist
+      #     path: dist
 
       - name: Download wheels
         uses: actions/download-artifact@v3

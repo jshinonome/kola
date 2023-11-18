@@ -23,7 +23,7 @@ features = [
 ]
 
 [dependencies.polars-core]
-version = "0.34.2"
+version = "0.35.2"
 features = [
   "dtype-categorical",
   "dtype-array",
