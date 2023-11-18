@@ -131,11 +131,12 @@ jobs:
           name: wheels
           path: dist/*.whl
 
-  publish-to-pypi:
+  pypi-publish:
+    name: Upload release to PyPI
     # needs: [create-sdist, build-wheels]
     needs: [build-wheels]
     environment:
-      name: release-python
+      name: pypi
       url: https://pypi.org/project/kola
     runs-on: ubuntu-20.04
     permissions:
