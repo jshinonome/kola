@@ -74,7 +74,7 @@ jobs:
         # manylinux aarch64 openssl doesn't work
         # architecture: [x86-64, aarch64]
         architecture: [x86-64]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12"]
         windows: [false]
         include:
           - os: windows-latest
