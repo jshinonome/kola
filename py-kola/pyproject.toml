@@ -23,7 +23,7 @@ classifiers = [
 ]
 keywords = ["q", "kdb", "polars", "dataframe", "arrow"]
 dynamic = ["version"]
-dependencies = ['polars >= 0.19.14']
+dependencies = ['polars >= 0.19.14', 'pyarrow >= 13.0.0']
 
 [tool.maturin]
 include = ["rust-toolchain.toml"]

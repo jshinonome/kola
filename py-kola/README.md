@@ -1,6 +1,6 @@
 # kola
 
-a Python [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q interface target to kdb+/q
+a Python [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
 
 ## Basic Data Type Map
 

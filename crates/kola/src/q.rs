@@ -228,11 +228,17 @@ impl Q {
     }
 
     pub fn execute(&mut self, expr: &str, args: &Vec<K>) -> Result<K, KolaError> {
+        if self.stream.is_none() {
+            self.connect()?;
+        };
         self.send(MsgType::Sync, expr, args)?;
         self.receive()
     }
 
     pub fn execute_async(&mut self, expr: &str, args: &Vec<K>) -> Result<(), KolaError> {
+        if self.stream.is_none() {
+            self.connect()?;
+        };
         self.send(MsgType::Async, expr, args)
     }
 }
