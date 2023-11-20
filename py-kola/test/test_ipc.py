@@ -189,10 +189,9 @@ def test_error(q):
         q.sync('"()!()"', {})
 
 
-def test_connection_error(q):
+def test_auto_connect(q):
     q.disconnect()
-    with pytest.raises(QKolaError, match="Not Connected."):
-        q.sync(".z.p")
+    q.sync(".z.p")
     q.connect()
 
 
