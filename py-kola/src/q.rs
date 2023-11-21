@@ -34,7 +34,7 @@ impl QConnector {
     }
 
     fn execute(&mut self, py: Python, expr: &str, args: &PyTuple) -> PyResult<PyObject> {
-        let k = match self.q.execute(expr, &to_k_vec(args)?) {
+        let k = match self.q.execute(expr, &cast_to_k_vec(args)?) {
             Ok(k) => k,
             Err(e) => return Err(PyKolaError::from(e).into()),
         };
@@ -103,7 +103,7 @@ impl QConnector {
         expr: &str,
         args: &PyTuple,
     ) -> Result<PyObject, PyKolaError> {
-        self.q.execute_async(expr, &to_k_vec(args)?)?;
+        self.q.execute_async(expr, &cast_to_k_vec(args)?)?;
         Ok(0.to_object(py))
     }
 }
@@ -151,7 +151,7 @@ impl QConnector {
     }
 }
 
-fn to_k_vec(tuple: &PyTuple) -> Result<Vec<K>, PyKolaError> {
+fn cast_to_k_vec(tuple: &PyTuple) -> Result<Vec<K>, PyKolaError> {
     let mut vec: Vec<K> = Vec::with_capacity(tuple.len());
     for obj in tuple.into_iter() {
         vec.push(cast_to_k(obj)?)
