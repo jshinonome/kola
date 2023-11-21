@@ -59,7 +59,7 @@ a Python [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
 
 > performance is impacted by converting guid to string, deserialize the uuid to 16 fixed binary list, use .hex() to convert binary to string if required
 
-> real/float 0n is mapped to polars null not NaN
+> real/float 0n is mapped to Polars null not NaN
 
 ```
 df.with_columns([
@@ -69,7 +69,7 @@ df.with_columns([
 
 ### Serialization
 
-#### Atom
+#### Basic Data Type
 
 | python type | k type      | note                        |
 | ----------- | ----------- | --------------------------- |
@@ -106,15 +106,79 @@ df.with_columns([
 | `pl.Time`                | time      |
 | `pl.DataFrame`           | table     |
 
-> Limited Support for dictionary as arguments, python `string` as keys and python `Atom` and `pl.Series` as values
+> Limited Support for dictionary as arguments, python `string` as keys and Python `Basic Data Types` and `pl.Series` as values.
 
 ### Quick Start
 
+#### Create a Connection
+
 ```python
 import polars as pl
-from datetime import datetime
 from kola import Q
 q = Q('localhost', 1800)
-q.connect()
-q.sync(".z.D")
 ```
+
+#### Connect(Optional)
+
+```python
+q.connect()
+```
+
+#### Disconnect
+
+```python
+q.disconnect()
+```
+
+#### String Query
+
+```python
+q.sync("select from trade where date=last date")
+```
+
+#### Functional Query
+
+For functional query, `kola` supports Python [Basic Data Type](#basic-data-type), `pl.Series`, `pl.DataFrame` and Python Dictionary with string keys and Python [Basic Data Type](#basic-data-type) and `pl.Series` values.
+
+```python
+from datetime import date, time
+
+q.sync(
+    ".gw.query",
+    "trade",
+    {
+        "date": date(2023, 11, 21),
+        "syms": pl.Series("", ["7203.T", "2226.T"], pl.Categorical),
+        # 09:00
+        "startTime": time(9),
+        # 11:30
+        "endTime": time(11, 30),
+    },
+)
+```
+
+#### Send DataFrame
+
+```python
+# pl_df is a Polars DataFrame
+q.sync("upsert", "alpha", pl_df)
+```
+
+```python
+# pd_df is a Pandas DataFrame, use pl.DateFrame to cast Pandas DataFrame
+q.sync("upsert", "alpha", pl.DataFrame(pd_df))
+```
+
+#### Async Query
+
+```python
+# pl_df is a Polars DataFrame
+q.asyn("upsert", "alpha", pl_df)
+```
+
+#### Polars Documentations
+
+Refer to
+
+- [User Guide](https://pola-rs.github.io/polars/user-guide/)
+- [API Reference](https://pola-rs.github.io/polars/py-polars/html/reference/index.html)
