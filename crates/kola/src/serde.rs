@@ -1028,9 +1028,13 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     .unwrap_unchecked()
                     .values()
             };
-
-            let v8: Vec<u8> = array.iter().map(|b| if b { 1u8 } else { 0u8 }).collect();
-            vec.write(&v8).unwrap();
+            array.iter().for_each(|b| {
+                if b {
+                    vec.write(&[1u8]).unwrap();
+                } else {
+                    unsafe { vec.set_len(vec.len() + 1) };
+                }
+            });
         }
         PolarsDataType::UInt8 => {
             k_size = 1;
@@ -1355,7 +1359,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         if b {
                             vec.write(&[1u8]).unwrap();
                         } else {
-                            vec.write(&[0u8]).unwrap();
+                            unsafe { vec.set_len(vec.len() + 1) }
                         }
                     }
                 }
@@ -1401,12 +1405,29 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                             if list.get_bit(j) {
                                 vec.write(&[1u8]).unwrap();
                             } else {
-                                vec.write(&[0u8]).unwrap();
+                                unsafe { vec.set_len(vec.len() + 1) }
                             }
                         }
                     }
                 }
-                PolarsDataType::UInt8 => todo!(),
+                PolarsDataType::UInt8 => {
+                    let list = unsafe {
+                        list.values()
+                            .as_any()
+                            .downcast_ref::<UInt8Array>()
+                            .unwrap_unchecked()
+                            .values()
+                            .as_ref()
+                    };
+                    for i in 0..k_length {
+                        let start_offset = offsets[i] as usize;
+                        let end_offset = offsets[i + 1] as usize;
+                        vec.write(&[4, 0]).unwrap();
+                        vec.write(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                            .unwrap();
+                        vec.write(&list[start_offset..end_offset]).unwrap();
+                    }
+                }
                 PolarsDataType::Int16 => todo!(),
                 PolarsDataType::Int32 => todo!(),
                 PolarsDataType::Int64 => todo!(),
@@ -1908,7 +1929,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_byte_nested_list() {
+    fn deserialize_and_serialize_byte_nested_list() {
         let vec = [
             0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 4, 0, 1, 0, 0, 0, 1, 4, 0, 2, 0, 0, 0, 1, 2,
         ]
@@ -1931,7 +1952,8 @@ mod tests {
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
-        assert_eq!(series, expect)
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
