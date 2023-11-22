@@ -1,7 +1,7 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Timelike, Utc};
 use polars_arrow::array::{
-    Array, BooleanArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, ListArray, PrimitiveArray, UInt8Array,
+    Array, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, ListArray, PrimitiveArray, UInt8Array,
 };
 use polars_arrow::bitmap::Bitmap;
 use polars_arrow::buffer::Buffer;
@@ -1327,29 +1327,44 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                 unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
             vec.write(v8).unwrap();
         }
-        PolarsDataType::Array(data_type, _size) => {
-            // let ptr = series.to_physical_repr();
+        PolarsDataType::Array(data_type, size) => {
+            vec.write(&[0, 0]).unwrap();
+            vec.write(&(k_length as i32).to_le_bytes()).unwrap();
+            let array = unsafe {
+                series.array().unwrap().chunks()[0]
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .unwrap_unchecked()
+            };
             match data_type.as_ref() {
-                // PolarsDataType::Boolean => todo!(),
-                // PolarsDataType::UInt8 => todo!(),
-                // PolarsDataType::UInt16 => todo!(),
-                // PolarsDataType::UInt32 => todo!(),
-                // PolarsDataType::UInt64 => todo!(),
-                // PolarsDataType::Int8 => todo!(),
-                // PolarsDataType::Int16 => todo!(),
-                // PolarsDataType::Int32 => todo!(),
-                // PolarsDataType::Int64 => todo!(),
-                // PolarsDataType::Float32 => todo!(),
-                // PolarsDataType::Float64 => todo!(),
-                // PolarsDataType::Utf8 => todo!(),
-                // PolarsDataType::Date => todo!(),
-                // PolarsDataType::Datetime(_, _) => todo!(),
-                // PolarsDataType::Duration(_) => todo!(),
-                // PolarsDataType::Time => todo!(),
-                // PolarsDataType::Array(_, _) => todo!(),
-                // PolarsDataType::List(_) => todo!(),
-                // PolarsDataType::Null => todo!(),
-                // PolarsDataType::Categorical(_) => todo!(),
+                PolarsDataType::Boolean => {
+                    let array = unsafe {
+                        array
+                            .values()
+                            .as_any()
+                            .downcast_ref::<BooleanArray>()
+                            .unwrap_unchecked()
+                            .values()
+                    };
+                    let len_vec = (*size as i32).to_le_bytes();
+                    for (i, b) in array.iter().enumerate() {
+                        if i % size == 0 {
+                            vec.write(&[1, 0]).unwrap();
+                            vec.write(&len_vec).unwrap();
+                        }
+                        if b {
+                            vec.write(&[1u8]).unwrap();
+                        } else {
+                            vec.write(&[0u8]).unwrap();
+                        }
+                    }
+                }
+                PolarsDataType::UInt8 => todo!(),
+                PolarsDataType::Int16 => todo!(),
+                PolarsDataType::Int32 => todo!(),
+                PolarsDataType::Int64 => todo!(),
+                PolarsDataType::Float32 => todo!(),
+                PolarsDataType::Float64 => todo!(),
                 _ => {
                     return Err(KolaError::NotSupportedPolarsNestedListTypeErr(
                         data_type.as_ref().clone(),
@@ -1357,8 +1372,52 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                 }
             }
         }
-        PolarsDataType::List(_) => {
-            return Err(KolaError::NotSupportedSeriesTypeErr(series.dtype().clone()))
+        PolarsDataType::List(data_type) => {
+            vec.write(&[0, 0]).unwrap();
+            vec.write(&(k_length as i32).to_le_bytes()).unwrap();
+            let list = unsafe {
+                series.list().unwrap().chunks()[0]
+                    .as_any()
+                    .downcast_ref::<ListArray<i64>>()
+                    .unwrap_unchecked()
+            };
+            let offsets = list.offsets().as_ref();
+            match data_type.as_ref() {
+                PolarsDataType::Boolean => {
+                    let list = unsafe {
+                        list.values()
+                            .as_any()
+                            .downcast_ref::<BooleanArray>()
+                            .unwrap_unchecked()
+                            .values()
+                    };
+                    for i in 0..k_length {
+                        let start_offset = offsets[i] as usize;
+                        let end_offset = offsets[i + 1] as usize;
+                        vec.write(&[1, 0]).unwrap();
+                        vec.write(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                            .unwrap();
+                        for j in start_offset..end_offset {
+                            if list.get_bit(j) {
+                                vec.write(&[1u8]).unwrap();
+                            } else {
+                                vec.write(&[0u8]).unwrap();
+                            }
+                        }
+                    }
+                }
+                PolarsDataType::UInt8 => todo!(),
+                PolarsDataType::Int16 => todo!(),
+                PolarsDataType::Int32 => todo!(),
+                PolarsDataType::Int64 => todo!(),
+                PolarsDataType::Float32 => todo!(),
+                PolarsDataType::Float64 => todo!(),
+                _ => {
+                    return Err(KolaError::NotSupportedPolarsNestedListTypeErr(
+                        data_type.as_ref().clone(),
+                    ))
+                }
+            }
         }
         PolarsDataType::Categorical(_) => {
             vec.write(&[11, 0]).unwrap();
@@ -1793,7 +1852,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_bool_nested_list() {
+    fn deserialize_and_serialize_bool_nested_list() {
         let vec = [
             0, 0, 3, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 2, 0, 0, 0, 1, 1, 1, 0, 3, 0, 0, 0, 1, 1,
             1,
@@ -1817,7 +1876,35 @@ mod tests {
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
-        assert_eq!(series, expect)
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
+    }
+
+    #[test]
+    fn deserialize_and_serialize_bool_nested_array() {
+        let vec = [
+            0, 0, 3, 0, 0, 0, 1, 0, 2, 0, 0, 0, 1, 0, 1, 0, 2, 0, 0, 0, 1, 0, 1, 0, 2, 0, 0, 0, 1,
+            0,
+        ]
+        .to_vec();
+        let k = deserialize(&vec, &mut 0).unwrap();
+        let k_type = vec[6];
+        let name = K_TYPE_NAME[k_type as usize];
+        let array = BooleanArray::from([true, false, true, false, true, false].map(|b| Some(b)));
+        let field = create_field(k_type, name).unwrap();
+        let expect = Series::from_arrow(
+            name,
+            FixedSizeListArray::new(
+                ArrowDataType::FixedSizeList(Box::new(field), 2),
+                array.boxed(),
+                None,
+            )
+            .boxed(),
+        )
+        .unwrap();
+        let series: Series = k.try_into().unwrap();
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
