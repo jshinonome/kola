@@ -32,30 +32,30 @@ a Python [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
 
 #### Composite Data Type
 
-| k type        | n   | size | python type              |
-| ------------- | --- | ---- | ------------------------ |
-| `boolean`     | 1   | 1    | `pl.Boolean`             |
-| `guid`        | 2   | 16   | `pl.List(pl.Binary(16))` |
-| `byte`        | 4   | 1    | `pl.Uint8`               |
-| `short`       | 5   | 2    | `pl.Int16`               |
-| `int`         | 6   | 4    | `pl.Int32`               |
-| `long`        | 7   | 8    | `pl.Int64`               |
-| `real`        | 8   | 4    | `pl.Float32`             |
-| `float`       | 9   | 8    | `pl.Float64`             |
-| `char`        | 10  | 1    | `pl.Utf8`                |
-| `string`      | 10  | 1    | `pl.Utf8`                |
-| `symbol`      | 11  | \*   | `pl.Categorical`         |
-| `timestamp`   | 12  | 8    | `pl.Datetime`            |
-| `month`       | 13  | 4    | `-`                      |
-| `date`        | 14  | 4    | `pl.Date`                |
-| `datetime`    | 15  | 8    | `pl.Datetime`            |
-| `timespan`    | 16  | 8    | `pl.Duration`            |
-| `minute`      | 17  | 4    | `pl.Time`                |
-| `second`      | 18  | 4    | `pl.Time`                |
-| `time`        | 19  | 4    | `pl.Time`                |
-| `table`       | 98  | \*   | `pl.DataFrame`           |
-| `dictionary`  | 99  | \*   | `-`                      |
-| `keyed` table | 99  | \*   | `pl.DataFrame`           |
+| k type           | n   | size | python type              |
+| ---------------- | --- | ---- | ------------------------ |
+| `boolean list`   | 1   | 1    | `pl.Boolean`             |
+| `guid list`      | 2   | 16   | `pl.List(pl.Binary(16))` |
+| `byte list`      | 4   | 1    | `pl.Uint8`               |
+| `short list`     | 5   | 2    | `pl.Int16`               |
+| `int list`       | 6   | 4    | `pl.Int32`               |
+| `long list`      | 7   | 8    | `pl.Int64`               |
+| `real list`      | 8   | 4    | `pl.Float32`             |
+| `float list`     | 9   | 8    | `pl.Float64`             |
+| `char list`      | 10  | 1    | `pl.Utf8`                |
+| `string list`    | 10  | 1    | `pl.Utf8`                |
+| `symbol list`    | 11  | \*   | `pl.Categorical`         |
+| `timestamp list` | 12  | 8    | `pl.Datetime`            |
+| `month list`     | 13  | 4    | `-`                      |
+| `date list`      | 14  | 4    | `pl.Date`                |
+| `datetime list`  | 15  | 8    | `pl.Datetime`            |
+| `timespan list`  | 16  | 8    | `pl.Duration`            |
+| `minute list`    | 17  | 4    | `pl.Time`                |
+| `second list`    | 18  | 4    | `pl.Time`                |
+| `time list`      | 19  | 4    | `pl.Time`                |
+| `table`          | 98  | \*   | `pl.DataFrame`           |
+| `dictionary`     | 99  | \*   | `-`                      |
+| `keyed table`    | 99  | \*   | `pl.DataFrame`           |
 
 > performance is impacted by converting guid to string, deserialize the uuid to 16 fixed binary list, use .hex() to convert binary to string if required
 
@@ -84,7 +84,7 @@ df.with_columns([
 | `timedelta` | `timespan`  |                             |
 | `time`      | `time`      | 00:00:00.000 - 23:59:59.999 |
 
-#### Composite Data Type
+#### Dictionary, Series and DataFrame
 
 | python type              | k type    |
 | ------------------------ | --------- |
@@ -120,11 +120,15 @@ q = Q('localhost', 1800)
 
 #### Connect(Optional)
 
+Automatically connect when querying q process
+
 ```python
 q.connect()
 ```
 
 #### Disconnect
+
+Automatically disconnect if any IO error
 
 ```python
 q.disconnect()
