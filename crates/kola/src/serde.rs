@@ -6,6 +6,7 @@ use polars_arrow::array::{
 use polars_arrow::bitmap::Bitmap;
 use polars_arrow::buffer::Buffer;
 use polars_arrow::datatypes::{ArrowDataType, Field, TimeUnit};
+use polars_arrow::legacy::kernels::set::set_at_nulls;
 use polars_arrow::{array::Utf8Array, offset::OffsetsBuffer};
 use polars_core::chunked_array::ops::{ChunkFillNullValue, FillNullStrategy};
 use polars_core::datatypes::{DataType as PolarsDataType, TimeUnit as PolarTimeUnit};
@@ -1428,11 +1429,146 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         vec.write(&list[start_offset..end_offset]).unwrap();
                     }
                 }
-                PolarsDataType::Int16 => todo!(),
-                PolarsDataType::Int32 => todo!(),
-                PolarsDataType::Int64 => todo!(),
-                PolarsDataType::Float32 => todo!(),
-                PolarsDataType::Float64 => todo!(),
+                PolarsDataType::Int16 => {
+                    let k_type = 5u8;
+                    let k_size = K_TYPE_SIZE[k_type as usize];
+                    let array = unsafe {
+                        list.values()
+                            .as_any()
+                            .downcast_ref::<Int16Array>()
+                            .unwrap_unchecked()
+                    };
+                    let p_array: PrimitiveArray<i16>;
+                    let array = if array.null_count() > 0 {
+                        p_array = set_at_nulls(array, i16::MIN);
+                        p_array.values()
+                    } else {
+                        array.values()
+                    };
+                    let v8: &[u8] = unsafe {
+                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                    };
+                    for i in 0..k_length {
+                        let start_offset = k_size * offsets[i] as usize;
+                        let end_offset = k_size * offsets[i + 1] as usize;
+                        vec.write(&[k_type, 0]).unwrap();
+                        vec.write(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                            .unwrap();
+                        vec.write(&v8[start_offset..end_offset]).unwrap();
+                    }
+                }
+                PolarsDataType::Int32 => {
+                    let k_type = 6u8;
+                    let k_size = K_TYPE_SIZE[k_type as usize];
+                    let array = unsafe {
+                        list.values()
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap_unchecked()
+                    };
+                    let p_array: PrimitiveArray<i32>;
+                    let array = if array.null_count() > 0 {
+                        p_array = set_at_nulls(array, i32::MIN);
+                        p_array.values()
+                    } else {
+                        array.values()
+                    };
+                    let v8: &[u8] = unsafe {
+                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                    };
+                    for i in 0..k_length {
+                        let start_offset = k_size * offsets[i] as usize;
+                        let end_offset = k_size * offsets[i + 1] as usize;
+                        vec.write(&[k_type, 0]).unwrap();
+                        vec.write(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                            .unwrap();
+                        vec.write(&v8[start_offset..end_offset]).unwrap();
+                    }
+                }
+                PolarsDataType::Int64 => {
+                    let k_type = 7u8;
+                    let k_size = K_TYPE_SIZE[k_type as usize];
+                    let array = unsafe {
+                        list.values()
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap_unchecked()
+                    };
+                    let p_array: PrimitiveArray<i64>;
+                    let array = if array.null_count() > 0 {
+                        p_array = set_at_nulls(array, i64::MIN);
+                        p_array.values()
+                    } else {
+                        array.values()
+                    };
+                    let v8: &[u8] = unsafe {
+                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                    };
+                    for i in 0..k_length {
+                        let start_offset = k_size * offsets[i] as usize;
+                        let end_offset = k_size * offsets[i + 1] as usize;
+                        vec.write(&[k_type, 0]).unwrap();
+                        vec.write(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                            .unwrap();
+                        vec.write(&v8[start_offset..end_offset]).unwrap();
+                    }
+                }
+                PolarsDataType::Float32 => {
+                    let k_type = 8u8;
+                    let k_size = K_TYPE_SIZE[k_type as usize];
+                    let array = unsafe {
+                        list.values()
+                            .as_any()
+                            .downcast_ref::<Float32Array>()
+                            .unwrap_unchecked()
+                    };
+                    let p_array: PrimitiveArray<f32>;
+                    let array = if array.null_count() > 0 {
+                        p_array = set_at_nulls(array, f32::NAN);
+                        p_array.values()
+                    } else {
+                        array.values()
+                    };
+                    let v8: &[u8] = unsafe {
+                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                    };
+                    for i in 0..k_length {
+                        let start_offset = k_size * offsets[i] as usize;
+                        let end_offset = k_size * offsets[i + 1] as usize;
+                        vec.write(&[k_type, 0]).unwrap();
+                        vec.write(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                            .unwrap();
+                        vec.write(&v8[start_offset..end_offset]).unwrap();
+                    }
+                }
+                PolarsDataType::Float64 => {
+                    let k_type = 9u8;
+                    let k_size = K_TYPE_SIZE[k_type as usize];
+                    let array = unsafe {
+                        list.values()
+                            .as_any()
+                            .downcast_ref::<Float64Array>()
+                            .unwrap_unchecked()
+                    };
+                    let p_array: PrimitiveArray<f64>;
+                    let array = if array.null_count() > 0 {
+                        p_array = set_at_nulls(array, f64::NAN);
+                        p_array.values()
+                    } else {
+                        array.values()
+                    };
+                    let v8: &[u8] = unsafe {
+                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                    };
+                    for i in 0..k_length {
+                        let start_offset = k_size * offsets[i] as usize;
+                        let end_offset = k_size * offsets[i + 1] as usize;
+                        vec.write(&[k_type, 0]).unwrap();
+                        vec.write(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                            .unwrap();
+                        vec.write(&v8[start_offset..end_offset]).unwrap();
+                    }
+                }
                 _ => {
                     return Err(KolaError::NotSupportedPolarsNestedListTypeErr(
                         data_type.as_ref().clone(),
@@ -1957,7 +2093,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_short_nested_list() {
+    fn deserialize_and_serialize_short_nested_list() {
         let vec = [
             0, 0, 3, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 128, 5, 0, 2, 0, 0, 0, 1, 0,
             2, 0,
@@ -1981,11 +2117,12 @@ mod tests {
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
-        assert_eq!(series, expect)
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
-    fn deserialize_int_nested_list() {
+    fn deserialize_and_serialize_int_nested_list() {
         let vec = [
             0, 0, 3, 0, 0, 0, 6, 0, 0, 0, 0, 0, 6, 0, 1, 0, 0, 0, 0, 0, 0, 128, 6, 0, 2, 0, 0, 0,
             1, 0, 0, 0, 2, 0, 0, 0,
@@ -2009,11 +2146,12 @@ mod tests {
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
-        assert_eq!(series, expect)
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
-    fn deserialize_long_nested_list() {
+    fn deserialize_and_serialize_long_nested_list() {
         let vec = [
             0, 0, 3, 0, 0, 0, 7, 0, 0, 0, 0, 0, 7, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 7, 0,
             2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
@@ -2037,11 +2175,12 @@ mod tests {
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
-        assert_eq!(series, expect)
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
-    fn deserialize_real_nested_list() {
+    fn deserialize_and_serialize_real_nested_list() {
         let vec = [
             0, 0, 3, 0, 0, 0, 8, 0, 0, 0, 0, 0, 8, 0, 1, 0, 0, 0, 0, 0, 128, 127, 8, 0, 2, 0, 0, 0,
             0, 0, 128, 63, 0, 0, 128, 255,
@@ -2066,11 +2205,12 @@ mod tests {
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
-        assert_eq!(series, expect)
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
-    fn deserialize_float_nested_list() {
+    fn deserialize_and_serialize_float_nested_list() {
         let vec = [
             0, 0, 3, 0, 0, 0, 9, 0, 0, 0, 0, 0, 9, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 127, 9, 0,
             2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 63, 0, 0, 0, 0, 0, 0, 240, 255,
@@ -2094,7 +2234,8 @@ mod tests {
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
-        assert_eq!(series, expect)
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
