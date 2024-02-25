@@ -14,8 +14,9 @@ polars-arrow = { workspace = true }
 thiserror = "1.0.50"
 rayon = "1.8.0"
 uuid = "1.6.1"
+lz4_flex = { version = "0.11.2", features = ["frame"] }
 
-[dependencies.polars-core]
+[dependencies.polars]
 workspace = true
 features = [
   "dtype-categorical",
@@ -27,3 +28,7 @@ features = [
   "dtype-date",
   "dtype-time",
 ]
+
+[dependencies.xxhash-rust]
+version = "0.8.5"
+features = ["xxh3", "const_xxh3", "xxh32"]

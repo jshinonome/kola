@@ -114,8 +114,8 @@ df.with_columns([
 
 ```python
 import polars as pl
-from kola import Q
-q = Q('localhost', 1800)
+import kola
+q = kola. Q('localhost', 1800)
 ```
 
 #### Connect(Optional)

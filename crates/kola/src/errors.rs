@@ -49,13 +49,13 @@ pub enum KolaError {
     NotSupportedArrowTypeErr(ArrowDataType),
 
     #[error("Not supported series type {0:?}.")]
-    NotSupportedSeriesTypeErr(polars_core::datatypes::DataType),
+    NotSupportedSeriesTypeErr(polars::datatypes::DataType),
 
     #[error("Not supported nested list type {0:?}.")]
     NotSupportedArrowNestedListTypeErr(ArrowDataType),
 
     #[error("Not supported polars nested list type {0:?}.")]
-    NotSupportedPolarsNestedListTypeErr(polars_core::datatypes::DataType),
+    NotSupportedPolarsNestedListTypeErr(polars::datatypes::DataType),
 
     #[error("Not supported big endian.")]
     NotSupportedBigEndianErr(),

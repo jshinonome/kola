@@ -4,11 +4,11 @@ members = ["crates/*", "py-kola"]
 default-members = ["crates/*"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.6.2"
 authors = ["Jo Shinonome <jo.shinonome@gmail.com>"]
 edition = "2021"
 repository = "https://github.com/jshinonome/kola"
-license = "BSD-3-Clause license"
+license = "BSD-3-Clause"
 
 [profile.dev]
 opt-level = 1
@@ -16,6 +16,12 @@ opt-level = 1
 [profile.release]
 opt-level = 3
 
-[workspace.dependencies]
-polars-core = { version = "0.35.4" }
-polars-arrow = { version = "0.35.4", default-features = false }
+[workspace.dependencies.polars-arrow]
+default-features = false
+version = "0.37.0"
+
+[workspace.dependencies.polars]
+version = "0.37.0"
+
+[workspace.dependencies.polars-core]
+version = "0.37.0"

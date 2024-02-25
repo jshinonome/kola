@@ -4,7 +4,6 @@ from datetime import date, datetime, time, timedelta, timezone
 
 import polars as pl
 import pytest
-
 from kola import QKolaError
 
 logger = logging.getLogger(__name__)
@@ -104,7 +103,9 @@ def test_read_atom(q, query, expect):
         # guid
         (
             "(,)0Ng",
-            pl.Series("guid", [bytes.fromhex("00000000000000000000000000000000")], pl.Binary),
+            pl.Series(
+                "guid", [bytes.fromhex("00000000000000000000000000000000")], pl.Binary
+            ),
         ),
         (
             '0Ng,"G"$"5ae7962d-49f2-404d-5aec-f7c8abbae288"',
@@ -122,11 +123,14 @@ def test_read_atom(q, query, expect):
         # short
         ("0N -0W 9 0Wh", pl.Series("short", [None, -32767, 9, 32767], pl.Int16)),
         # int
-        ("0N -0W 9 0Wi", pl.Series("int", [None, -2147483647, 9, 2147483647], pl.Int32)),
+        (
+            "0N -0W 9 0Wi",
+            pl.Series("int", [None, None, 9, None], pl.Int32),
+        ),
         # long
         (
             "0N -0W 9 0W",
-            pl.Series("long", [None, -9223372036854775807, 9, 9223372036854775807], pl.Int64),
+            pl.Series("long", [None, None, 9, None], pl.Int64),
         ),
         # real
         (
@@ -161,9 +165,15 @@ def test_read_atom(q, query, expect):
         # minute
         ("0N 00:00 12:34u", pl.Series("second", [None, 0, 45240000000000], pl.Time)),
         # second
-        ("0N 00:00:00 12:34:56v", pl.Series("second", [None, 0, 45296000000000], pl.Time)),
+        (
+            "0N 00:00:00 12:34:56v",
+            pl.Series("second", [None, 0, 45296000000000], pl.Time),
+        ),
         # time
-        ("0n 00:00:00.000 12:34:56.789t", pl.Series("time", [None, 0, 45296789000000], pl.Time)),
+        (
+            "0n 00:00:00.000 12:34:56.789t",
+            pl.Series("time", [None, 0, 45296789000000], pl.Time),
+        ),
         # datetime
         (
             "0n 2022.06.03T00:00:00.000 2022.06.03T12:34:56.789z",
@@ -208,7 +218,9 @@ def test_asyn(q):
             pl.DataFrame(
                 [
                     pl.Series("sym", ["a", "b", "c"], pl.Categorical),
-                    pl.Series("prices", [[0, 1, 2], [3, 4, 5], [6, 7, 8]], pl.List(int)),
+                    pl.Series(
+                        "prices", [[0, 1, 2], [3, 4, 5], [6, 7, 8]], pl.List(int)
+                    ),
                 ]
             ),
         ),
@@ -331,12 +343,20 @@ def test_write_atom(q, k_atom, py_atom):
         # long
         (
             "0N -0W 9 0W",
-            pl.Series("", [None, -9223372036854775807, 9, 9223372036854775807], pl.Int64),
+            pl.Series(
+                "", [None, -9223372036854775807, 9, 9223372036854775807], pl.Int64
+            ),
         ),
         # real
-        ("0n -0w 9 0We", pl.Series("", [math.nan, -math.inf, 9.0, math.inf], pl.Float32)),
+        (
+            "0n -0w 9 0We",
+            pl.Series("", [math.nan, -math.inf, 9.0, math.inf], pl.Float32),
+        ),
         # float
-        ("0n -0w 9 0W", pl.Series("", [math.nan, -math.inf, 9.0, math.inf], pl.Float64)),
+        (
+            "0n -0w 9 0W",
+            pl.Series("", [math.nan, -math.inf, 9.0, math.inf], pl.Float64),
+        ),
         # string
         ('("";"string")', pl.Series("", ["", "string"], pl.Utf8)),
         # symbol
@@ -358,7 +378,10 @@ def test_write_atom(q, k_atom, py_atom):
             pl.Series("timespan", [None, 0, 45296123456789], pl.Duration("ns")),
         ),
         # time
-        ("0n 00:00:00.000 12:34:56.789t", pl.Series("time", [None, 0, 45296789000000], pl.Time)),
+        (
+            "0n 00:00:00.000 12:34:56.789t",
+            pl.Series("time", [None, 0, 45296789000000], pl.Time),
+        ),
     ],
 )
 def test_write_list(q, k_list, py_list):

@@ -1,17 +1,21 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Timelike, Utc};
+use polars::chunked_array::ops::{ChunkFillNullValue, FillNullStrategy};
+use polars::datatypes::{
+    CategoricalOrdering, DataType as PolarsDataType, TimeUnit as PolarTimeUnit,
+};
+use polars::export::num::ToBytes;
+use polars::prelude::DataFrame;
+use polars::series::{IntoSeries, Series};
 use polars_arrow::array::{
-    Array, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, ListArray, PrimitiveArray, UInt8Array,
+    Array, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, ListArray, PrimitiveArray, UInt8Array,
+    Utf8ViewArray,
 };
 use polars_arrow::bitmap::Bitmap;
 use polars_arrow::buffer::Buffer;
 use polars_arrow::datatypes::{ArrowDataType, Field, TimeUnit};
 use polars_arrow::legacy::kernels::set::set_at_nulls;
 use polars_arrow::{array::Utf8Array, offset::OffsetsBuffer};
-use polars_core::chunked_array::ops::{ChunkFillNullValue, FillNullStrategy};
-use polars_core::datatypes::{DataType as PolarsDataType, TimeUnit as PolarTimeUnit};
-use polars_core::prelude::{DataFrame, LargeBinaryArray};
-use polars_core::series::{IntoSeries, Series};
 use rayon::iter::IntoParallelIterator;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::cmp::{max, min};
@@ -234,7 +238,7 @@ pub fn deserialize(vec: &Vec<u8>, pos: &mut usize) -> Result<K, KolaError> {
                     k
                 )));
             };
-            let symbols = symbols.utf8().unwrap();
+            let symbols = symbols.str().unwrap();
             *pos += 6;
             let mut k_types = vec![0u8; symbols.len()];
             let mut vectors: Vec<&[u8]> = Vec::with_capacity(symbols.len());
@@ -259,7 +263,7 @@ pub fn deserialize(vec: &Vec<u8>, pos: &mut usize) -> Result<K, KolaError> {
         }
         101 => {
             *pos += 1;
-            if vec[*pos] == 0 {
+            if vec[start_pos] == 0 {
                 Ok(K::None(0))
             } else {
                 Err(KolaError::NotSupportedKOperatorErr(vec[*pos]))
@@ -432,7 +436,11 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
         6 => {
             let new_ptr: *const i32 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
-            let bitmap = Bitmap::from_iter(slice.into_iter().map(|s| *s != i32::MIN));
+            let bitmap = Bitmap::from_iter(
+                slice
+                    .into_iter()
+                    .map(|s| *s > i32::MIN + 1 && *s < i32::MAX),
+            );
             let mut array = Int32Array::from_slice(slice);
             array.set_validity(Some(bitmap));
             series = Series::from_arrow(name, array.boxed()).unwrap();
@@ -441,7 +449,11 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
         7 => {
             let new_ptr: *const i64 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
-            let bitmap = Bitmap::from_iter(slice.into_iter().map(|s| *s != i64::MIN));
+            let bitmap = Bitmap::from_iter(
+                slice
+                    .into_iter()
+                    .map(|s| *s > i64::MIN + 1 && *s < i64::MAX),
+            );
             let mut array = Int64Array::from_slice(slice);
             array.set_validity(Some(bitmap));
             series = Series::from_arrow(name, array.boxed()).unwrap();
@@ -504,7 +516,12 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             .boxed();
             series = Series::from_arrow(name, array_box).unwrap();
             if as_column {
-                series = series.cast(&PolarsDataType::Categorical(None)).unwrap();
+                series = series
+                    .cast(&PolarsDataType::Categorical(
+                        None,
+                        CategoricalOrdering::Lexical,
+                    ))
+                    .unwrap();
             }
             return Ok(K::Series(series));
         }
@@ -775,6 +792,8 @@ pub fn decompress(vec: &Vec<u8>, de_vec: &mut Vec<u8>) {
             x[(de_vec[i] ^ de_vec[i + 1]) as usize] = i
         }
 
+        x_pos = d_pos - 1;
+
         if n & i != 0 {
             d_pos += r;
             x_pos = d_pos;
@@ -1021,37 +1040,41 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             vec.write(&[1, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
             let ptr = series.to_physical_repr();
-            let array = &ptr.bool().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<BooleanArray>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            array.iter().for_each(|b| {
-                if b {
-                    vec.write(&[1u8]).unwrap();
-                } else {
-                    unsafe { vec.set_len(vec.len() + 1) };
-                }
-            });
+            let chunks = &ptr.bool().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let array = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                array.iter().for_each(|b| {
+                    if b {
+                        vec.write(&[1u8]).unwrap();
+                    } else {
+                        unsafe { vec.set_len(vec.len() + 1) };
+                    }
+                });
+            })
         }
         PolarsDataType::UInt8 => {
             k_size = 1;
             vec.write(&[4, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
             let ptr = series.to_physical_repr();
-            let array = &ptr.u8().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<u8>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let v8 = unsafe { core::slice::from_raw_parts(array.as_ptr(), k_length / k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.u8().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let array = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<u8>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let v8 = unsafe { core::slice::from_raw_parts(array.as_ptr(), k_length / k_size) };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Int16 => {
             k_size = 2;
@@ -1064,17 +1087,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.i16().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<i16>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.i16().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let array = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<i16>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Int32 => {
             k_size = 4;
@@ -1087,17 +1113,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.i32().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<i32>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.i32().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let array = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<i32>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Int64 => {
             k_size = 8;
@@ -1110,17 +1139,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.i64().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<i64>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.i64().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let array = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<i64>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Float32 => {
             k_size = 4;
@@ -1138,17 +1170,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.f32().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<f32>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.f32().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let array = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<f32>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Float64 => {
             k_size = 8;
@@ -1166,39 +1201,44 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.f64().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<f64>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.f64().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let array = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<f64>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
-        PolarsDataType::Utf8 => {
+        PolarsDataType::String => {
             vec.write(&[0, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
             let ptr = series.to_physical_repr();
-            let array = &ptr.utf8().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<Utf8Array<i64>>()
-                    .unwrap_unchecked()
-            };
-            let buffer = array.values();
-            let offsets = array.offsets().as_slice();
-            let v8 = unsafe { core::slice::from_raw_parts(buffer.as_ptr().cast(), buffer.len()) };
-            for i in 0..k_length {
-                vec.write(&[10, 0]).unwrap();
-                let o0 = offsets[i] as usize;
-                let o1 = offsets[i + 1] as usize;
-                vec.write(&((o1 - o0) as i32).to_le_bytes()).unwrap();
-                vec.write(&v8[o0..o1]).unwrap();
-            }
+            let array = ptr.str().unwrap();
+            array.chunks().into_iter().for_each(|arr| {
+                let arr = &**arr;
+                let arr = unsafe { &*(arr as *const dyn Array as *const Utf8ViewArray) };
+                arr.into_iter().for_each(|s| {
+                    vec.write(&[10, 0]).unwrap();
+                    match s {
+                        Some(s) => {
+                            vec.write(&(s.len() as u32).to_le_bytes()).unwrap();
+                            let v8 =
+                                unsafe { core::slice::from_raw_parts(s.as_ptr().cast(), s.len()) };
+                            vec.write(v8).unwrap();
+                        }
+                        None => {
+                            vec.write(&[0, 0, 0, 0]).unwrap();
+                        }
+                    }
+                });
+            });
         }
         PolarsDataType::Date => {
             // max date - 95026601
@@ -1212,28 +1252,31 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.i32().unwrap().chunks()[0];
-            let buffer = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<i32>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let array: Vec<i32> = buffer
-                .as_slice()
-                .iter()
-                .map(|d| {
-                    if *d == i32::MIN {
-                        *d
-                    } else {
-                        d.saturating_sub(10957)
-                    }
-                })
-                .collect();
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.i32().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let buffer = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<i32>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let array: Vec<i32> = buffer
+                    .as_slice()
+                    .iter()
+                    .map(|d| {
+                        if *d == i32::MIN {
+                            *d
+                        } else {
+                            d.saturating_sub(10957)
+                        }
+                    })
+                    .collect();
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Datetime(unit, _) => {
             k_size = 8;
@@ -1246,33 +1289,36 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.i64().unwrap().chunks()[0];
-            let buffer = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<i64>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let multplier = match unit {
-                PolarTimeUnit::Nanoseconds => 1,
-                PolarTimeUnit::Microseconds => 1000,
-                PolarTimeUnit::Milliseconds => 1000000,
-            };
-            let array: Vec<i64> = buffer
-                .as_slice()
-                .iter()
-                .map(|d| {
-                    if *d == i64::MIN {
-                        *d
-                    } else {
-                        d.saturating_mul(multplier).saturating_sub(NANOS_DIFF)
-                    }
-                })
-                .collect();
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.i64().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let buffer = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<i64>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let multplier = match unit {
+                    PolarTimeUnit::Nanoseconds => 1,
+                    PolarTimeUnit::Microseconds => 1000,
+                    PolarTimeUnit::Milliseconds => 1000000,
+                };
+                let array: Vec<i64> = buffer
+                    .as_slice()
+                    .iter()
+                    .map(|d| {
+                        if *d == i64::MIN {
+                            *d
+                        } else {
+                            d.saturating_mul(multplier).saturating_sub(NANOS_DIFF)
+                        }
+                    })
+                    .collect();
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Duration(_) => {
             k_size = 8;
@@ -1285,17 +1331,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.i64().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<i64>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let chunks = &ptr.i64().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let array = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<i64>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Time => {
             k_size = 4;
@@ -1308,29 +1357,32 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 series.to_physical_repr()
             };
-            let array = &ptr.i64().unwrap().chunks()[0];
-            let buffer = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<i64>>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let array: Vec<i32> = buffer
-                .as_slice()
-                .iter()
-                .map(|d| {
-                    if *d == i64::MIN {
-                        i32::MIN
-                    } else {
-                        (d / 1000_000) as i32
-                    }
-                })
-                .collect();
+            let chunks = &ptr.i64().unwrap().chunks();
+            chunks.into_iter().for_each(|array| {
+                let buffer = unsafe {
+                    array
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<i64>>()
+                        .unwrap_unchecked()
+                        .values()
+                };
+                let array: Vec<i32> = buffer
+                    .as_slice()
+                    .iter()
+                    .map(|d| {
+                        if *d == i64::MIN {
+                            i32::MIN
+                        } else {
+                            (d / 1000_000) as i32
+                        }
+                    })
+                    .collect();
 
-            let v8 =
-                unsafe { core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size) };
-            vec.write(v8).unwrap();
+                let v8 = unsafe {
+                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                };
+                vec.write(v8).unwrap();
+            })
         }
         PolarsDataType::Array(data_type, size) => {
             vec.write(&[0, 0]).unwrap();
@@ -1576,7 +1628,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                 }
             }
         }
-        PolarsDataType::Categorical(_) => {
+        PolarsDataType::Categorical(_, _) => {
             vec.write(&[11, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
             let cat = series.categorical().unwrap();
@@ -1593,20 +1645,22 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                 });
         }
         PolarsDataType::Binary => {
-            k_size = 16;
             vec.write(&[2, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
-            let array = &series.binary().unwrap().chunks()[0];
-            let buffer = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<LargeBinaryArray>()
-                    .unwrap_unchecked()
-                    .values()
-            };
-            let v8: &[u8] =
-                unsafe { core::slice::from_raw_parts(buffer.as_ptr(), k_length * k_size) };
-            vec.write(v8).unwrap();
+            let array = series.binary().unwrap();
+            array.chunks().into_iter().for_each(|arr| {
+                let arr = &**arr;
+                let arr = unsafe { &*(arr as *const dyn Array as *const BinaryViewArray) };
+                arr.into_iter().for_each(|b| match b {
+                    Some(b) => {
+                        vec.write(b).unwrap();
+                    }
+                    None => {
+                        vec.write(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+                            .unwrap();
+                    }
+                });
+            });
         }
         _ => return Err(KolaError::NotSupportedSeriesTypeErr(series.dtype().clone())),
     }
@@ -1615,11 +1669,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
 
 #[cfg(test)]
 mod tests {
+    use polars::{datatypes::CategoricalOrdering, prelude::NamedFrom};
     use polars_arrow::{
         array::{BooleanArray, UInt8Array},
         offset::OffsetsBuffer,
     };
-    use polars_core::prelude::NamedFrom;
 
     use crate::{serde::*, types::Dict};
 
@@ -1734,13 +1788,15 @@ mod tests {
         .to_vec();
         let k = deserialize(&vec, &mut 0).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
-        let expect = Series::from_arrow(
-            name,
-            Int32Array::from([None, Some(i32::MIN + 1), Some(0), Some(i32::MAX)]).boxed(),
-        )
-        .unwrap();
+        let expect =
+            Series::from_arrow(name, Int32Array::from([None, None, Some(0), None]).boxed())
+                .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
+        let vec = [
+            6, 0, 4, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 128,
+        ]
+        .to_vec();
         assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
@@ -1753,13 +1809,16 @@ mod tests {
         .to_vec();
         let k = deserialize(&vec, &mut 0).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
-        let expect = Series::from_arrow(
-            name,
-            Int64Array::from([None, Some(i64::MIN + 1), Some(0), Some(i64::MAX)]).boxed(),
-        )
-        .unwrap();
+        let expect =
+            Series::from_arrow(name, Int64Array::from([None, None, Some(0), None]).boxed())
+                .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
+        let vec = [
+            7, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 128,
+        ]
+        .to_vec();
         assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
@@ -1823,8 +1882,13 @@ mod tests {
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
-        let expect = expect.cast(&PolarsDataType::Categorical(None)).unwrap();
-        assert_eq!(series.to_arrow(0), expect.to_arrow(0));
+        let expect = expect
+            .cast(&PolarsDataType::Categorical(
+                None,
+                CategoricalOrdering::Lexical,
+            ))
+            .unwrap();
+        assert_eq!(series.to_arrow(0, false), expect.to_arrow(0, false));
         assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 

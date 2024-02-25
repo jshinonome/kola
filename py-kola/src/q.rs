@@ -231,3 +231,10 @@ fn cast_to_k(any: &PyAny) -> Result<K, PyKolaError> {
         )))
     }
 }
+
+#[pyfunction]
+pub fn read_binary_table(filepath: &str) -> PyResult<PyDataFrame> {
+    kola::io::read_binary_table(filepath)
+        .map_err(|e| PyKolaError::from(e).into())
+        .map(|df| PyDataFrame(df))
+}

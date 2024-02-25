@@ -1,5 +1,6 @@
 import contextlib
 import os
+import socket
 
 with contextlib.suppress(ImportError):  # Module not available when building docs
     from kola.kola import QConnector
@@ -16,7 +17,7 @@ class Q(object):
     ):
         if not user:
             user = os.getlogin()
-        if not host:
+        if (not host) or host == socket.gethostname():
             host = "127.0.0.1"
         self.q = QConnector(host, port, user, passwd, enable_tls)
 

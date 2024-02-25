@@ -1,10 +1,11 @@
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
-use polars_arrow::array::{FixedSizeListArray, Utf8Array};
-use polars_core::{
+use polars::{
     datatypes::DataType as PolarsDataType,
     prelude::{DataFrame, LargeListArray},
     series::Series,
 };
+use polars_arrow::array::{FixedSizeListArray, ValueSize};
+use rayon::iter::ParallelIterator;
 use uuid::Uuid;
 
 use crate::errors::KolaError;
@@ -138,17 +139,11 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
         // to timespan
         PolarsDataType::Duration(_) => Ok(length * 8 + 6),
         // to string
-        PolarsDataType::Utf8 => {
+        PolarsDataType::String => {
             let ptr = series.to_physical_repr();
-            let array = &ptr.utf8().unwrap().chunks()[0];
-            let array = unsafe {
-                array
-                    .as_any()
-                    .downcast_ref::<Utf8Array<i64>>()
-                    .unwrap_unchecked()
-            };
-            let buffer = array.values();
-            Ok(array.len() * 6 + buffer.len())
+            let array = ptr.str().unwrap();
+            let str_size: usize = array.par_iter().map(|s| s.unwrap_or("").len()).sum();
+            Ok(array.get_values_size() * 6 + str_size)
         }
         PolarsDataType::List(data_type) => {
             let array = series.chunks()[0]
@@ -201,7 +196,7 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
             }
         }
         // to symbol
-        PolarsDataType::Categorical(_) => {
+        PolarsDataType::Categorical(_, _) => {
             let cat = series.categorical().unwrap();
             let mut length: usize = 6;
             for s in cat.iter_str() {
