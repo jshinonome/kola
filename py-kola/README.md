@@ -115,7 +115,7 @@ df.with_columns([
 ```python
 import polars as pl
 import kola
-q = kola. Q('localhost', 1800)
+q = kola.Q('localhost', 1800)
 ```
 
 #### Connect(Optional)
@@ -149,10 +149,10 @@ from datetime import date, time
 
 q.sync(
     ".gw.query",
-    "trade",
+    "table",
     {
         "date": date(2023, 11, 21),
-        "syms": pl.Series("", ["7203.T", "2226.T"], pl.Categorical),
+        "syms": pl.Series("", ["sym0", "sym1"], pl.Categorical),
         # 09:00
         "startTime": time(9),
         # 11:30
@@ -165,19 +165,19 @@ q.sync(
 
 ```python
 # pl_df is a Polars DataFrame
-q.sync("upsert", "alpha", pl_df)
+q.sync("upsert", "table", pl_df)
 ```
 
 ```python
 # pd_df is a Pandas DataFrame, use pl.DateFrame to cast Pandas DataFrame
-q.sync("upsert", "alpha", pl.DataFrame(pd_df))
+q.sync("upsert", "table", pl.DataFrame(pd_df))
 ```
 
 #### Async Query
 
 ```python
 # pl_df is a Polars DataFrame
-q.asyn("upsert", "alpha", pl_df)
+q.asyn("upsert", "table", pl_df)
 ```
 
 #### Polars Documentations
