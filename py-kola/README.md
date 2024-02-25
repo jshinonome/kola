@@ -61,6 +61,8 @@ a Python [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
 
 > real/float 0n is mapped to Polars null not NaN
 
+> short/int/long 0Nh/i/j, 0Wh/i/j and -0Wh/i/j are mapped to null
+
 ```
 df.with_columns([
     (pl.col("uuid").apply(lambda u: u.hex()))
