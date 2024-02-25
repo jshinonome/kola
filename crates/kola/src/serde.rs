@@ -738,7 +738,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
                 None,
             )
             .boxed();
-            return Ok(K::Series(Series::from_arrow(name, array_box).unwrap()));
+            Ok(K::Series(Series::from_arrow(name, array_box).unwrap()))
         }
         _ => Err(KolaError::NotSupportedKNestedListErr(k_type)),
     }

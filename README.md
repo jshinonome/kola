@@ -3,4 +3,8 @@
 
 ## Kola
 
-a Python [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
+a [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
+
+- [Python](https://pypi.org/project/kola/)
+- Rust
+- R
