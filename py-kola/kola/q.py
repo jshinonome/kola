@@ -19,6 +19,9 @@ class Q(object):
             user = os.getlogin()
         if (not host) or host == socket.gethostname():
             host = "127.0.0.1"
+        self.host = host
+        self.port = port
+        self.user = user
         self.q = QConnector(host, port, user, passwd, enable_tls)
 
     def connect(self):
