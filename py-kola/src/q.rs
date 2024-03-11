@@ -1,6 +1,7 @@
 use std::cmp::{max, min};
 
 use crate::error::PyKolaError::{self, PythonError};
+use crate::error::QKolaError;
 use chrono::{Datelike, Timelike};
 use kola::q::Q;
 use kola::types::{Dict, K};
@@ -85,7 +86,7 @@ impl QConnector {
                     py,
                     0,
                     k.num_seconds() as i32,
-                    (k.num_microseconds().unwrap() % 1000000) as i32,
+                    (k.num_microseconds().unwrap_or(0) % 1000000) as i32,
                     false,
                 )?;
                 Ok(delta.to_object(py))
@@ -154,81 +155,69 @@ impl QConnector {
 fn cast_to_k_vec(tuple: &PyTuple) -> Result<Vec<K>, PyKolaError> {
     let mut vec: Vec<K> = Vec::with_capacity(tuple.len());
     for obj in tuple.into_iter() {
-        vec.push(cast_to_k(obj)?)
+        vec.push(cast_to_k(obj).map_err(|e| PythonError(e.to_string()))?)
     }
     Ok(vec)
 }
 
-fn cast_to_k(any: &PyAny) -> Result<K, PyKolaError> {
+fn cast_to_k(any: &PyAny) -> PyResult<K> {
     if any.is_instance_of::<PyBool>() {
-        Ok(K::Bool(any.extract::<bool>().unwrap()))
+        Ok(K::Bool(any.extract::<bool>()?))
         // TODO: this heap allocs on failure
     } else if any.is_instance_of::<PyInt>() {
         match any.extract::<i64>() {
             Ok(v) => Ok(K::Long(v)),
-            Err(e) => {
-                return Err(PythonError(format!(
-                    "not able to extract integer - {:?}",
-                    e
-                )))
-            }
+            Err(e) => Err(e),
         }
     } else if any.is_instance_of::<PyFloat>() {
-        Ok(K::Float(any.extract::<f64>().unwrap()))
+        Ok(K::Float(any.extract::<f64>()?))
     } else if any.is_instance_of::<PyString>() {
-        let value = any.extract::<&str>().unwrap();
+        let value = any.extract::<&str>()?;
         Ok(K::Symbol(value.to_string()))
     } else if any.is_instance_of::<PyBytes>() {
-        let value = any.downcast::<PyBytes>().unwrap();
-        Ok(K::String(
-            String::from_utf8(value.as_bytes().to_vec()).unwrap(),
-        ))
+        let value = any.downcast::<PyBytes>()?;
+        Ok(K::String(String::from_utf8(value.as_bytes().to_vec())?))
     } else if any.is_instance_of::<PyList>() || any.is_instance_of::<PyTuple>() {
-        return Err(PythonError(
-            "not support serialize python list/tuple".to_string(),
-        ));
-    } else if any.hasattr(intern!(any.py(), "_s")).unwrap() {
-        let series = any.extract::<PySeries>().unwrap().into();
+        return Err(PythonError("not support serialize python list/tuple".to_string()).into());
+    } else if any.hasattr(intern!(any.py(), "_s"))? {
+        let series = any.extract::<PySeries>()?.into();
         Ok(K::Series(series))
-    } else if any.hasattr(intern!(any.py(), "_df")).unwrap() {
-        let df = any.extract::<PyDataFrame>().unwrap().into();
+    } else if any.hasattr(intern!(any.py(), "_df"))? {
+        let df = any.extract::<PyDataFrame>()?.into();
         Ok(K::DataFrame(df))
     } else if any.is_none() {
         Ok(K::None(0))
     } else if any.is_instance_of::<PyDateTime>() {
-        let py_datetime = any.downcast::<PyDateTime>().unwrap();
-        Ok(K::DateTime(py_datetime.extract().unwrap()))
+        let py_datetime = any.downcast::<PyDateTime>()?;
+        Ok(K::DateTime(py_datetime.extract()?))
     } else if any.is_instance_of::<PyDate>() {
-        let py_date = any.downcast::<PyDate>().unwrap();
-        Ok(K::Date(py_date.extract().unwrap()))
+        let py_date = any.downcast::<PyDate>()?;
+        Ok(K::Date(py_date.extract()?))
     } else if any.is_instance_of::<PyTime>() {
-        let py_time = any.downcast::<PyTime>().unwrap();
-        Ok(K::Time(py_time.extract().unwrap()))
+        let py_time = any.downcast::<PyTime>()?;
+        Ok(K::Time(py_time.extract()?))
     } else if any.is_instance_of::<PyDelta>() {
-        let py_delta = any.downcast::<PyDelta>().unwrap();
-        Ok(K::Duration(py_delta.extract().unwrap()))
+        let py_delta = any.downcast::<PyDelta>()?;
+        Ok(K::Duration(py_delta.extract()?))
     } else if any.is_instance_of::<PyDict>() {
-        let py_dict = any.downcast::<PyDict>().unwrap();
+        let py_dict = any.downcast::<PyDict>()?;
         let mut dict = Dict::with_capacity(py_dict.len());
         for (k, v) in py_dict.into_iter() {
             let k = match k.extract::<&str>() {
                 Ok(s) => s.to_string(),
                 Err(_) => {
-                    return Err(PythonError(format!(
-                        "Requires str as key, got {:?}",
-                        k.get_type()
-                    )))
+                    return Err(
+                        PythonError(format!("Requires str as key, got {:?}", k.get_type())).into(),
+                    )
                 }
             };
             let v = cast_to_k(v)?;
-            dict.set(k, v).unwrap();
+            dict.set(k, v)
+                .map_err(|e| PyErr::new::<QKolaError, _>(e.to_string()))?;
         }
         Ok(K::Dict(dict))
     } else {
-        Err(PythonError(format!(
-            "Not supported python type {:?}",
-            any.get_type(),
-        )))
+        Err(PythonError(format!("Not supported python type {:?}", any.get_type(),)).into())
     }
 }
 
