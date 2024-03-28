@@ -28,5 +28,5 @@ dependencies = ['polars >= 0.20.16', 'pyarrow >= 10.0.1']
 [tool.maturin]
 include = ["rust-toolchain.toml"]
 
-# [project.urls]
-# Repository = "https://github.com/jshinonome/kola"
+[project.urls]
+Repository = "https://github.com/jshinonome/kola"
