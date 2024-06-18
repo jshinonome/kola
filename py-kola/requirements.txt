@@ -2,3 +2,4 @@ polars
 pyarrow
 maturin
 pytest
+patchelf

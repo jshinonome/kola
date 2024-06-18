@@ -32,7 +32,7 @@ build-opt: .venv  ## Compile and install Kola with nearly full optimization on a
 
 .PHONY: build-release
 build-release: .venv  ## Compile and install a faster Kola binary with full optimizations
-	@unset CONDA_PREFIX && source $(VENV_BIN)/activate && maturin develop --release
+	@unset CONDA_PREFIX && source $(VENV_BIN)/activate && maturin build --release
 
 .PHONY: build-native
 build-native: .venv  ## Same as build, except with native CPU optimizations turned on
