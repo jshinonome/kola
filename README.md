@@ -11,7 +11,7 @@ a [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
 
 ## Python Compatibility
 
-As github have limited images for Linux, this requires at least 2.31 glibc (`rpm -qa glibc`). For lower version of glib, use the following steps to compile python package.
+As github have limited images for Linux, this requires at least 2.31 glibc (`rpm -qa glibc`). For lower version of glibc, use the following steps to compile python package.
 
 1. install rustup and rust (https://www.rust-lang.org/tools/install)
 
@@ -22,7 +22,7 @@ rustup show
 
 2. `git clone https://github.com/jshinonome/kola.git`
 
-3. `cd kola/py_kola`
+3. `cd kola/py-kola`
 
 4. `sudo dnf install openssl-devel`
 
