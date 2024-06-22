@@ -24,9 +24,6 @@ pub enum KolaError {
     #[error("Require 3+ version")]
     VersionErr(),
 
-    #[error("Not supported unknown k type empty list.")]
-    NotSupportedUnknownKTypeEmptyListErr(),
-
     #[error("Not supported k type {0:?}.")]
     NotSupportedKTypeErr(u8),
 

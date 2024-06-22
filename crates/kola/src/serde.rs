@@ -343,7 +343,7 @@ fn calculate_array_end_index(
             let length = u32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
             if length == 0 {
-                return Err(KolaError::NotSupportedUnknownKTypeEmptyListErr());
+                return Ok(pos);
             }
             let sub_k_type = vec[pos];
             let k_size = K_TYPE_SIZE[sub_k_type as usize];
@@ -359,7 +359,7 @@ fn calculate_array_end_index(
                 }
                 Ok(pos)
             } else {
-                return Err(KolaError::NotSupportedKNestedListErr(sub_k_type));
+                Err(KolaError::NotSupportedKNestedListErr(sub_k_type))
             }
         }
         // symbol list
@@ -661,6 +661,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
     let offsets_buf = OffsetsBuffer::<i64>::try_from(offsets).unwrap();
     let name = K_TYPE_NAME[k_type as usize];
     match k_type {
+        0 if length == 0 => Ok(K::Series(Series::new_empty("", &PolarsDataType::Null))),
         1 | 4 | 5 | 6 | 7 | 8 | 9 => {
             let field: Field;
             let list_array: ListArray<i32>;
