@@ -31,7 +31,7 @@ jobs:
         # manylinux aarch64 openssl doesn't work
         # architecture: [x86-64, aarch64]
         architecture: [x86-64]
-        python-version: ["3.8", "3.9", "3.10"]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +79,7 @@ jobs:
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: ${{ matrix.os }}-${{ matrix.python-version }}-whl
           path: dist/*.whl
 
   pypi-publish:
@@ -103,7 +103,6 @@ jobs:
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:
-          name: wheels
           path: dist
 
       - name: Publish to PyPI

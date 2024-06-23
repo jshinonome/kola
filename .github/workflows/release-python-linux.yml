@@ -120,7 +120,7 @@ jobs:
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: ${{ matrix.os }}-${{ matrix.python-version }}-whl
           path: dist/*.whl
 
   pypi-publish:
@@ -144,7 +144,6 @@ jobs:
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:
-          name: wheels
           path: dist
 
       - name: Publish to PyPI
