@@ -145,6 +145,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
+          merge-multiple: true
 
       - name: Publish to PyPI
         if: inputs.dry-run == false
