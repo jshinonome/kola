@@ -6,8 +6,8 @@ use chrono::{Datelike, Timelike};
 use kola::q::Q;
 use kola::types::{Dict, K};
 use pyo3::types::{
-    timezone_utc, PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList,
-    PyString, PyTime, PyTuple,
+    timezone_utc_bound, PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt,
+    PyList, PyString, PyTime, PyTuple,
 };
 use pyo3::{intern, prelude::*};
 use pyo3_polars::{PyDataFrame, PySeries};
@@ -34,7 +34,7 @@ impl QConnector {
         }
     }
 
-    fn execute(&mut self, py: Python, expr: &str, args: &PyTuple) -> PyResult<PyObject> {
+    fn execute(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
         let k = match self.q.execute(expr, &cast_to_k_vec(args)?) {
             Ok(k) => k,
             Err(e) => return Err(PyKolaError::from(e).into()),
@@ -53,10 +53,10 @@ impl QConnector {
             K::String(k) => Ok(k.to_object(py)),
             K::DateTime(k) => {
                 if let Some(ns) = k.timestamp_nanos_opt() {
-                    let datetime = PyDateTime::from_timestamp(
+                    let datetime = PyDateTime::from_timestamp_bound(
                         py,
                         ns as f64 / 1000000000.0,
-                        Some(timezone_utc(py)),
+                        Some(&timezone_utc_bound(py)),
                     )?;
                     Ok(datetime.to_object(py))
                 } else {
@@ -67,11 +67,11 @@ impl QConnector {
                 let mut days = k.num_days_from_ce() as i64 - 719163;
                 days = min(days, 2932532);
                 days = max(days, -719162);
-                let date = PyDate::from_timestamp(py, 86400 * days)?;
+                let date = PyDate::from_timestamp_bound(py, 86400 * days)?;
                 Ok(date.to_object(py))
             }
             K::Time(k) => {
-                let time = PyTime::new(
+                let time = PyTime::new_bound(
                     py,
                     k.hour() as u8,
                     k.minute() as u8,
@@ -82,7 +82,7 @@ impl QConnector {
                 Ok(time.to_object(py))
             }
             K::Duration(k) => {
-                let delta = PyDelta::new(
+                let delta = PyDelta::new_bound(
                     py,
                     0,
                     k.num_seconds() as i32,
@@ -102,7 +102,7 @@ impl QConnector {
         &mut self,
         py: Python,
         expr: &str,
-        args: &PyTuple,
+        args: Bound<PyTuple>,
     ) -> Result<PyObject, PyKolaError> {
         self.q.execute_async(expr, &cast_to_k_vec(args)?)?;
         Ok(0.to_object(py))
@@ -137,7 +137,7 @@ impl QConnector {
     }
 
     #[pyo3(signature = (expr, *args))]
-    pub fn sync(&mut self, py: Python, expr: &str, args: &PyTuple) -> PyResult<PyObject> {
+    pub fn sync(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
         self.execute(py, expr, args)
     }
 
@@ -146,13 +146,13 @@ impl QConnector {
         &mut self,
         py: Python,
         expr: &str,
-        args: &PyTuple,
+        args: Bound<PyTuple>,
     ) -> Result<PyObject, PyKolaError> {
         self.execute_async(py, expr, args)
     }
 }
 
-fn cast_to_k_vec(tuple: &PyTuple) -> Result<Vec<K>, PyKolaError> {
+fn cast_to_k_vec(tuple: Bound<PyTuple>) -> Result<Vec<K>, PyKolaError> {
     let mut vec: Vec<K> = Vec::with_capacity(tuple.len());
     for obj in tuple.into_iter() {
         vec.push(cast_to_k(obj).map_err(|e| PythonError(e.to_string()))?)
@@ -160,7 +160,7 @@ fn cast_to_k_vec(tuple: &PyTuple) -> Result<Vec<K>, PyKolaError> {
     Ok(vec)
 }
 
-fn cast_to_k(any: &PyAny) -> PyResult<K> {
+fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
     if any.is_instance_of::<PyBool>() {
         Ok(K::Bool(any.extract::<bool>()?))
         // TODO: this heap allocs on failure

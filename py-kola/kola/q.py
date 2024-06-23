@@ -16,7 +16,10 @@ class Q(object):
         enable_tls=False,
     ):
         if not user:
-            user = os.getlogin()
+            try:
+                user = os.getlogin()
+            except Exception:
+                user = "unknown"
         if (not host) or host == socket.gethostname():
             host = "127.0.0.1"
         self.host = host

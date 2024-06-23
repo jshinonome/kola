@@ -395,6 +395,9 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
     let mut pos = 1;
     let length = u32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
+    if length == 0 {
+        return new_empty_series(k_type);
+    }
     let mut series: Series;
     let array_box: Box<dyn Array>;
     let k_size = K_TYPE_SIZE[k_type as usize];
@@ -425,6 +428,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             Ok(K::Series(series))
         }
         5 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const i16 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let bitmap = Bitmap::from_iter(slice.into_iter().map(|s| *s != i16::MIN));
@@ -434,6 +438,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             Ok(K::Series(series))
         }
         6 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const i32 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let bitmap = Bitmap::from_iter(
@@ -447,6 +452,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             Ok(K::Series(series))
         }
         7 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const i64 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let bitmap = Bitmap::from_iter(
@@ -460,6 +466,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             Ok(K::Series(series))
         }
         8 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const f32 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let bitmap = Bitmap::from_iter(slice.into_iter().map(|s| !f32::is_nan(*s)));
@@ -469,6 +476,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             Ok(K::Series(series))
         }
         9 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const f64 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let bitmap = Bitmap::from_iter(slice.into_iter().map(|s| !f64::is_nan(*s)));
@@ -526,6 +534,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             return Ok(K::Series(series));
         }
         12 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const i64 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let slice = slice
@@ -546,6 +555,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             Ok(K::Series(series))
         }
         14 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const i32 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let bitmap = Bitmap::from_iter(slice.iter().map(|s| *s != i32::MIN));
@@ -562,6 +572,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             Ok(K::Series(series))
         }
         15 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const f64 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let slice = slice
@@ -590,6 +601,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
         }
         // timespan
         16 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const i64 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let bitmap = Bitmap::from_iter(slice.iter().map(|s| *s != i64::MIN));
@@ -604,6 +616,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
         }
         // minutes, seconds, time
         17 | 18 | 19 => {
+            let array_vec = array_vec.to_vec();
             let new_ptr: *const i32 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
             let bitmap = Bitmap::from_iter(slice.iter().map(|s| *s != i32::MIN));
@@ -636,6 +649,34 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
     }
 }
 
+fn new_empty_series(k_type: u8) -> Result<K, KolaError> {
+    let name = K_TYPE_NAME[k_type as usize];
+    let series = match k_type {
+        0 => Series::new_empty(name, &PolarsDataType::Null),
+        1 => Series::new_empty(name, &PolarsDataType::Boolean),
+        2 => Series::new_empty(name, &PolarsDataType::Binary),
+        4 | 10 => Series::new_empty(name, &PolarsDataType::String),
+        5 => Series::new_empty(name, &PolarsDataType::Int16),
+        6 => Series::new_empty(name, &PolarsDataType::Int32),
+        7 => Series::new_empty(name, &PolarsDataType::Int64),
+        8 => Series::new_empty(name, &PolarsDataType::Float32),
+        9 => Series::new_empty(name, &PolarsDataType::Float64),
+        11 => Series::new_empty(
+            name,
+            &PolarsDataType::Categorical(None, CategoricalOrdering::Lexical),
+        ),
+        12 | 15 => Series::new_empty(
+            name,
+            &PolarsDataType::Datetime(PolarTimeUnit::Nanoseconds, None),
+        ),
+        14 => Series::new_empty(name, &PolarsDataType::Date),
+        16 => Series::new_empty(name, &PolarsDataType::Duration(PolarTimeUnit::Nanoseconds)),
+        17 | 18 | 19 => Series::new_empty(name, &PolarsDataType::Time),
+        _ => return Err(KolaError::NotSupportedKListErr(k_type)),
+    };
+    Ok(K::Series(series))
+}
+
 fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
     let mut pos: usize = 1;
     let length = u32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap()) as usize;
@@ -661,7 +702,6 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
     let offsets_buf = OffsetsBuffer::<i64>::try_from(offsets).unwrap();
     let name = K_TYPE_NAME[k_type as usize];
     match k_type {
-        0 if length == 0 => Ok(K::Series(Series::new_empty("", &PolarsDataType::Null))),
         1 | 4 | 5 | 6 | 7 | 8 | 9 => {
             let field: Field;
             let list_array: ListArray<i32>;

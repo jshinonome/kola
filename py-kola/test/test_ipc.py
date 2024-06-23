@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 import polars as pl
 import pytest
+
 from kola import QKolaError
 
 logger = logging.getLogger(__name__)
@@ -193,8 +194,6 @@ def test_read_list(q, query, expect):
 def test_error(q):
     with pytest.raises(QKolaError, match="type"):
         q.sync("1+`a")
-    with pytest.raises(QKolaError, match="unknown k type empty list"):
-        q.sync('0#enlist `float`long`char`string!(9.0;9;"c";"")')
     with pytest.raises(QKolaError, match='"Not supported empty dictionary"'):
         q.sync('"()!()"', {})
 
