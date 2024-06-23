@@ -58,7 +58,7 @@ jobs:
   #         python -c 'import kola'
 
   #     - name: Upload sdist
-  #       uses: actions/upload-artifact@v3
+  #       uses: actions/upload-artifact@v4
   #       with:
   #         name: sdist
   #         path: dist/*.tar.gz
@@ -118,7 +118,7 @@ jobs:
           # manylinux: "2_28"
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: wheels
           path: dist/*.whl
@@ -136,13 +136,13 @@ jobs:
 
     steps:
       # - name: Download sdist
-      #   uses: actions/download-artifact@v3
+      #   uses: actions/download-artifact@v4
       #   with:
       #     name: sdist
       #     path: dist
 
       - name: Download wheels
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: wheels
           path: dist
