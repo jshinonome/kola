@@ -18,7 +18,7 @@ opt-level = 3
 
 [workspace.dependencies.polars-arrow]
 default-features = false
-version = "0.41.0"
+version = "0.41.3"
 
 [workspace.dependencies.polars]
-version = "0.41.0"
+version = "0.41.3"
