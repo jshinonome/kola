@@ -47,7 +47,8 @@ impl Q {
     fn auth(&self, q_stream: &mut impl QStream) -> Result<(), KolaError> {
         let credential = format!("{}:{}", &self.user, &self.password);
         let _ = q_stream.write_all(credential.as_bytes());
-        let _ = q_stream.write(&[3, 0]);
+        // protocol version 6 allows IPC size from 0 to max uint5
+        let _ = q_stream.write(&[6, 0]);
         let mut support_version = [0u8];
         match q_stream.read(&mut support_version) {
             Ok(read_length) => {
@@ -97,7 +98,8 @@ impl Q {
                     total_length += v.len();
                 }
                 let mut vec: Vec<u8> = Vec::with_capacity(length);
-                vec.write(&[1, msg_type as u8, 0, 0])?;
+                let length_ext = (total_length >> 32) as u8;
+                vec.write(&[1, msg_type as u8, 0, length_ext])?;
                 vec.write(&(total_length as u32).to_le_bytes())?;
                 vec.write(&[0, 0])?;
                 vec.write(&((args.len() + 1) as u32).to_le_bytes())?;
@@ -151,9 +153,10 @@ impl Q {
                 self.shutdown()?;
                 return Err(KolaError::NotSupportedBigEndianErr());
             }
-            let is_compressed = header[2] == 1;
-            let mut length = u32::from_le_bytes(header[4..].try_into().unwrap());
-            let mut vec: Vec<u8> = vec![0u8; (length - 8) as usize];
+            let compression_mode = header[2];
+            let mut length = u32::from_le_bytes(header[4..].try_into().unwrap()) as usize;
+            length = length + ((header[3] as usize) << 32);
+            let mut vec: Vec<u8> = vec![0u8; length - 8];
             match stream.read_exact(&mut vec) {
                 Ok(_) => (),
                 Err(e) => {
@@ -161,10 +164,15 @@ impl Q {
                     return Err(KolaError::IOError(e));
                 }
             };
-            if is_compressed {
-                length = u32::from_le_bytes(vec[..4].try_into().unwrap());
-                let mut de_vec = vec![0u8; (length - 8) as usize];
-                decompress(&vec, &mut de_vec);
+            if compression_mode == 1 {
+                length = u32::from_le_bytes(vec[..4].try_into().unwrap()) as usize;
+                let mut de_vec = vec![0u8; length - 8];
+                decompress(&vec, &mut de_vec, 4);
+                deserialize(&de_vec, &mut 0)
+            } else if compression_mode == 2 {
+                length = u64::from_le_bytes(vec[..8].try_into().unwrap()) as usize;
+                let mut de_vec = vec![0u8; length - 8];
+                decompress(&vec, &mut de_vec, 8);
                 deserialize(&de_vec, &mut 0)
             } else {
                 deserialize(&vec, &mut 0)

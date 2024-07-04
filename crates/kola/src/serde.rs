@@ -798,11 +798,11 @@ fn create_datetime(ns: i64) -> DateTime<Utc> {
     }
 }
 
-pub fn decompress(vec: &Vec<u8>, de_vec: &mut Vec<u8>) {
+pub fn decompress(vec: &[u8], de_vec: &mut [u8], start_pos: usize) {
     let mut d_pos: usize = 0;
     // skip decompressed msg length
     let mut x_pos: usize = 4;
-    let mut c_pos: usize = 4;
+    let mut c_pos: usize = start_pos;
     let mut x = [0usize; 256];
     let mut n: u8 = 0;
 
@@ -848,13 +848,22 @@ pub fn compress(vec: Vec<u8>) -> Vec<u8> {
         return vec;
     } else {
         let mut c_vec = vec![0u8; vec.len() / 2];
-        // copy raw vec length
-        for i in 4..8 {
-            c_vec[i + 4] = vec[i]
+        // compressed bytes start position
+        let mut c_pos: usize;
+        if vec.len() > 4294967295 {
+            c_pos = 16;
+            c_vec[2] = 2;
+            for i in 3..8 {
+                c_vec[i + 8] = vec[i]
+            }
+        } else {
+            c_pos = 12;
+            c_vec[2] = 1;
+            // copy raw vec length
+            for i in 4..8 {
+                c_vec[i + 4] = vec[i]
+            }
         }
-        c_vec[2] = 1;
-
-        let mut c_pos: usize = 12;
         let mut n_pos: usize = c_pos;
         let mut o_pos: usize = 8;
         let mut x = [0usize; 256];
@@ -921,6 +930,7 @@ pub fn compress(vec: Vec<u8>) -> Vec<u8> {
         for i in 0..4 {
             c_vec[i + 4] = c_len[i]
         }
+        c_vec[3] = (c_pos >> 32) as u8;
         c_vec.resize(c_pos, 0u8);
         return c_vec;
     }
@@ -1727,7 +1737,7 @@ mod tests {
         .to_vec();
         let length = u32::from_le_bytes(vec[0..4].try_into().unwrap());
         let mut de_vec = vec![0; (length - 8) as usize];
-        decompress(&vec, &mut de_vec);
+        decompress(&vec, &mut de_vec, 4);
         let mut expected_vec = [1u8; 2006].to_vec();
         expected_vec[1] = 0;
         expected_vec[2] = 208;
