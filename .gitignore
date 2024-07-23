@@ -8,3 +8,5 @@ test.ipynb
 bmk
 .venv
 .pytest_cache
+r-kola
+tmp
