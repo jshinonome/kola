@@ -10,9 +10,9 @@ crate-type = ["cdylib"]
 [dependencies]
 kola = { path = "../crates/kola" }
 pyo3 = { version = "0.21.2", features = ["extension-module", "chrono"] }
-thiserror = "1.0.58"
+thiserror = "1.0.63"
 pyo3-polars = "0.15.0"
-chrono = "0.4.37"
+chrono = "0.4.38"
 
 [dependencies.polars]
 workspace = true
