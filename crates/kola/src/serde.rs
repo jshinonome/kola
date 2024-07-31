@@ -347,7 +347,7 @@ fn calculate_array_end_index(
             }
             let sub_k_type = vec[pos];
             let k_size = K_TYPE_SIZE[sub_k_type as usize];
-            if let 1 | 4 | 5 | 6 | 7 | 8 | 9 | 10 = sub_k_type {
+            if let 1 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 12 = sub_k_type {
                 for _ in 0..length {
                     if sub_k_type != vec[pos] {
                         return Err(KolaError::NotSupportedKMixedListErr(sub_k_type, vec[pos]));
@@ -686,7 +686,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
     let mut offsets: Vec<i64> = vec![0i64; length + 1];
     let mut v8 = Vec::with_capacity(length * k_size);
     // bool, byte, short, int, long, real, float, string
-    if let 1 | 4 | 5 | 6 | 7 | 8 | 9 | 10 = k_type {
+    if let 1 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 12 = k_type {
         for i in 0..length {
             pos += 2;
             let sub_length = i32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap());
@@ -702,7 +702,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
     let offsets_buf = OffsetsBuffer::<i64>::try_from(offsets).unwrap();
     let name = K_TYPE_NAME[k_type as usize];
     match k_type {
-        1 | 4 | 5 | 6 | 7 | 8 | 9 => {
+        1 | 4 | 5 | 6 | 7 | 8 | 9 | 12 => {
             let field: Field;
             let list_array: ListArray<i32>;
             let array_box: Box<dyn Array>;
@@ -756,8 +756,26 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
                 array.set_validity(Some(bitmap));
                 array_box = array.boxed();
                 field = create_field(k_type, "float").unwrap();
+            } else if k_type == 12 {
+                let new_ptr: *mut i64 = v8.as_mut_ptr().cast();
+                let slice = unsafe { core::slice::from_raw_parts_mut(new_ptr, v8.len() / k_size) };
+                slice.iter_mut().for_each(|ns| {
+                    if *ns > i64::MIN {
+                        *ns = ns.saturating_add(NANOS_DIFF)
+                    }
+                });
+                let bitmap = Bitmap::from_iter(slice.iter().map(|s| *s != i64::MIN));
+                let array = PrimitiveArray::new(
+                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                    unsafe {
+                        Vec::from_raw_parts(slice.as_mut_ptr(), slice.len(), slice.len()).into()
+                    },
+                    Some(bitmap),
+                );
+                array_box = array.boxed();
+                field = create_field(k_type, "timestamp").unwrap();
             } else {
-                return Err(KolaError::NotSupportedKNestedListErr(k_type));
+                unreachable!()
             }
 
             list_array = ListArray::<i32>::new(
@@ -781,7 +799,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
             .boxed();
             Ok(K::Series(Series::from_arrow(name, array_box).unwrap()))
         }
-        _ => Err(KolaError::NotSupportedKNestedListErr(k_type)),
+        _ => unreachable!(),
     }
 }
 
@@ -2336,6 +2354,35 @@ mod tests {
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
         let array = Float64Array::from([Some(f64::INFINITY), Some(1.0), Some(f64::NEG_INFINITY)]);
+        let field = create_field(k_type, name).unwrap();
+        let expect = Series::from_arrow(
+            name,
+            ListArray::new(
+                ArrowDataType::List(Box::new(field)),
+                offsets,
+                array.boxed(),
+                None,
+            )
+            .boxed(),
+        )
+        .unwrap();
+        let series: Series = k.try_into().unwrap();
+        assert_eq!(series, expect);
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
+    }
+
+    #[test]
+    fn deserialize_and_serialize_timestamp_nested_list() {
+        let vec = [
+            0, 0, 3, 0, 0, 0, 7, 0, 0, 0, 0, 0, 7, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 7, 0,
+            2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
+        ]
+        .to_vec();
+        let k = deserialize(&vec, &mut 0).unwrap();
+        let k_type = vec[6];
+        let name = K_TYPE_NAME[k_type as usize];
+        let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
+        let array = Int64Array::from([None, Some(1), Some(2)]);
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
             name,
