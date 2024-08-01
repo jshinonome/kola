@@ -39,63 +39,7 @@ impl QConnector {
             Ok(k) => k,
             Err(e) => return Err(PyKolaError::from(e).into()),
         };
-        match k {
-            K::Bool(k) => Ok(k.to_object(py)),
-            K::Guid(k) => Ok(k.to_string().to_object(py)),
-            K::Byte(k) => Ok(k.to_object(py)),
-            K::Short(k) => Ok(k.to_object(py)),
-            K::Int(k) => Ok(k.to_object(py)),
-            K::Long(k) => Ok(k.to_object(py)),
-            K::Real(k) => Ok(k.to_object(py)),
-            K::Float(k) => Ok(k.to_object(py)),
-            K::Char(k) => Ok((k as char).to_object(py)),
-            K::Symbol(k) => Ok(k.to_object(py)),
-            K::String(k) => Ok(k.to_object(py)),
-            K::DateTime(k) => {
-                if let Some(ns) = k.timestamp_nanos_opt() {
-                    let datetime = PyDateTime::from_timestamp_bound(
-                        py,
-                        ns as f64 / 1000000000.0,
-                        Some(&timezone_utc_bound(py)),
-                    )?;
-                    Ok(datetime.to_object(py))
-                } else {
-                    Err(PythonError("failed to get nanoseconds".to_string()).into())
-                }
-            }
-            K::Date(k) => {
-                let mut days = k.num_days_from_ce() as i64 - 719163;
-                days = min(days, 2932532);
-                days = max(days, -719162);
-                let date = PyDate::from_timestamp_bound(py, 86400 * days)?;
-                Ok(date.to_object(py))
-            }
-            K::Time(k) => {
-                let time = PyTime::new_bound(
-                    py,
-                    k.hour() as u8,
-                    k.minute() as u8,
-                    k.second() as u8,
-                    k.nanosecond() / 1000,
-                    None,
-                )?;
-                Ok(time.to_object(py))
-            }
-            K::Duration(k) => {
-                let delta = PyDelta::new_bound(
-                    py,
-                    0,
-                    k.num_seconds() as i32,
-                    (k.num_microseconds().unwrap_or(0) % 1000000) as i32,
-                    false,
-                )?;
-                Ok(delta.to_object(py))
-            }
-            K::Series(k) => Ok(PySeries(k).into_py(py)),
-            K::DataFrame(k) => Ok(PyDataFrame(k).into_py(py)),
-            K::None(_) => Ok(().to_object(py)),
-            K::Dict(_) => todo!("No plan to support deserializing dictionary"),
-        }
+        cast_k_to_py(py, k)
     }
 
     fn execute_async(
@@ -106,6 +50,73 @@ impl QConnector {
     ) -> Result<PyObject, PyKolaError> {
         self.q.execute_async(expr, &cast_to_k_vec(args)?)?;
         Ok(0.to_object(py))
+    }
+}
+
+fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
+    match k {
+        K::Bool(k) => Ok(k.to_object(py)),
+        K::Guid(k) => Ok(k.to_string().to_object(py)),
+        K::Byte(k) => Ok(k.to_object(py)),
+        K::Short(k) => Ok(k.to_object(py)),
+        K::Int(k) => Ok(k.to_object(py)),
+        K::Long(k) => Ok(k.to_object(py)),
+        K::Real(k) => Ok(k.to_object(py)),
+        K::Float(k) => Ok(k.to_object(py)),
+        K::Char(k) => Ok((k as char).to_object(py)),
+        K::Symbol(k) => Ok(k.to_object(py)),
+        K::String(k) => Ok(k.to_object(py)),
+        K::DateTime(k) => {
+            if let Some(ns) = k.timestamp_nanos_opt() {
+                let datetime = PyDateTime::from_timestamp_bound(
+                    py,
+                    ns as f64 / 1000000000.0,
+                    Some(&timezone_utc_bound(py)),
+                )?;
+                Ok(datetime.to_object(py))
+            } else {
+                Err(PythonError("failed to get nanoseconds".to_string()).into())
+            }
+        }
+        K::Date(k) => {
+            let mut days = k.num_days_from_ce() as i64 - 719163;
+            days = min(days, 2932532);
+            days = max(days, -719162);
+            let date = PyDate::from_timestamp_bound(py, 86400 * days)?;
+            Ok(date.to_object(py))
+        }
+        K::Time(k) => {
+            let time = PyTime::new_bound(
+                py,
+                k.hour() as u8,
+                k.minute() as u8,
+                k.second() as u8,
+                k.nanosecond() / 1000,
+                None,
+            )?;
+            Ok(time.to_object(py))
+        }
+        K::Duration(k) => {
+            let delta = PyDelta::new_bound(
+                py,
+                0,
+                k.num_seconds() as i32,
+                (k.num_microseconds().unwrap_or(0) % 1000000) as i32,
+                false,
+            )?;
+            Ok(delta.to_object(py))
+        }
+        K::MixedList(l) => {
+            let py_objects = l
+                .into_iter()
+                .map(|k| cast_k_to_py(py, k))
+                .collect::<PyResult<Vec<PyObject>>>()?;
+            Ok(PyTuple::new_bound(py, py_objects).into())
+        }
+        K::Series(k) => Ok(PySeries(k).into_py(py)),
+        K::DataFrame(k) => Ok(PyDataFrame(k).into_py(py)),
+        K::None(_) => Ok(().to_object(py)),
+        K::Dict(_) => todo!("No plan to support deserializing dictionary"),
     }
 }
 
@@ -149,6 +160,11 @@ impl QConnector {
         args: Bound<PyTuple>,
     ) -> Result<PyObject, PyKolaError> {
         self.execute_async(py, expr, args)
+    }
+
+    pub fn receive(&mut self, py: Python) -> PyResult<PyObject> {
+        let k = self.q.receive().map_err(|e| PyKolaError::from(e))?;
+        cast_k_to_py(py, k)
     }
 }
 

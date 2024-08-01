@@ -21,7 +21,7 @@ pub fn read_binary_table(path: &str) -> Result<DataFrame, KolaError> {
     if buffer[0..8] == vec![107u8, 120, 122, 105, 112, 112, 101, 100] {
         buffer = unzip(&buffer)?;
     }
-    match deserialize(&buffer, &mut 2)? {
+    match deserialize(&buffer, &mut 2, false)? {
         K::DataFrame(k) => Ok(k),
         _ => Err(KolaError::Err("Not a table".to_owned())),
     }
@@ -105,7 +105,7 @@ mod tests {
         ]
         .to_vec();
         assert_eq!(io::unzip(&zipped).unwrap(), unzipped);
-        let k = deserialize(&unzipped, &mut 2).unwrap();
+        let k = deserialize(&unzipped, &mut 2, false).unwrap();
         let df: DataFrame = k.try_into().unwrap();
         let sym = Series::from_arrow(
             "sym",

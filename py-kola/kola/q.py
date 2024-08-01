@@ -18,7 +18,7 @@ class Q(object):
         user="",
         passwd="",
         enable_tls=False,
-        auto_reconnect=False,
+        retries=0,
     ):
         if not user:
             try:
@@ -30,7 +30,7 @@ class Q(object):
         self.host = host
         self.port = port
         self.user = user
-        self.auto_reconnect = auto_reconnect
+        self.retries = retries
         self.q = QConnector(host, port, user, passwd, enable_tls)
 
     def connect(self):
@@ -40,20 +40,50 @@ class Q(object):
         self.q.shutdown()
 
     def sync(self, expr: str, *args):
-        if self.auto_reconnect:
+        if self.retries <= 0:
+            return self.q.sync(expr, *args)
+        else:
             n = 0
-            # return 10 times, exponential backoff
-            while n < 10:
+            # exponential backoff
+            while n < self.retries:
                 try:
                     return self.q.sync(expr, *args)
                 except QKolaIOError as e:
                     logging.info(
-                        "Failed to query - %s, retrying in %s seconds", e, 2**n
+                        "Failed to sync - '%s', retrying in %s seconds", e, 2**n
                     )
                     time.sleep(2**n)
                     n += 1
-        else:
-            return self.q.sync(expr, *args)
 
     def asyn(self, expr: str, *args):
-        return self.q.asyn(expr, *args)
+        if self.retries <= 0:
+            return self.q.asyn(expr, *args)
+        else:
+            n = 0
+            # exponential backoff
+            while n < self.retries:
+                try:
+                    return self.q.asyn(expr, *args)
+                except QKolaIOError as e:
+                    logging.info(
+                        "Failed to async - '%s', retrying in %s seconds", e, 2**n
+                    )
+                    time.sleep(2**n)
+                    n += 1
+
+    def receive(self):
+        if self.retries <= 0:
+            return self.q.receive()
+        else:
+            n = 0
+            # exponential backoff
+            while n < self.retries:
+                try:
+                    return self.q.receive()
+                except QKolaIOError as e:
+                    logging.info(
+                        "Failed to receive - '%s', retrying in %s seconds", e, 2**n
+                    )
+                    self.connect()
+                    time.sleep(2**n)
+                    n += 1

@@ -3,7 +3,6 @@ use polars::chunked_array::ops::{ChunkFillNullValue, FillNullStrategy};
 use polars::datatypes::{
     CategoricalOrdering, DataType as PolarsDataType, TimeUnit as PolarTimeUnit,
 };
-use polars::export::num::ToBytes;
 use polars::prelude::DataFrame;
 use polars::series::{IntoSeries, Series};
 use polars_arrow::array::{
@@ -15,6 +14,7 @@ use polars_arrow::bitmap::Bitmap;
 use polars_arrow::buffer::Buffer;
 use polars_arrow::datatypes::{ArrowDataType, Field, TimeUnit};
 use polars_arrow::legacy::kernels::set::set_at_nulls;
+use polars_arrow::types::NativeType;
 use polars_arrow::{array::Utf8Array, offset::OffsetsBuffer};
 use rayon::iter::IntoParallelIterator;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -55,7 +55,7 @@ use crate::{
     types::{K, K_TYPE_SIZE},
 };
 
-pub fn deserialize(vec: &Vec<u8>, pos: &mut usize) -> Result<K, KolaError> {
+pub fn deserialize(vec: &Vec<u8>, pos: &mut usize, is_column: bool) -> Result<K, KolaError> {
     let k_type = vec[*pos];
     *pos += 1;
     let start_pos = *pos;
@@ -114,7 +114,7 @@ pub fn deserialize(vec: &Vec<u8>, pos: &mut usize) -> Result<K, KolaError> {
                 while eod_pos <= vec.len() && vec[eod_pos] != 0 {
                     eod_pos += 1;
                 }
-                *pos = eod_pos;
+                *pos = eod_pos + 1;
                 Ok(K::Symbol(
                     String::from_utf8(vec[start_pos..eod_pos].to_vec()).unwrap(),
                 ))
@@ -204,7 +204,21 @@ pub fn deserialize(vec: &Vec<u8>, pos: &mut usize) -> Result<K, KolaError> {
         0..=19 => {
             let end_pos = match calculate_array_end_index(vec, *pos, k_type) {
                 Ok(end_pos) => end_pos,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    if !is_column && k_type == 0 {
+                        *pos += 1;
+                        let length =
+                            u32::from_le_bytes(vec[*pos..*pos + 4].try_into().unwrap()) as usize;
+                        *pos += 4;
+                        let mut res = Vec::with_capacity(length);
+                        for _ in 0..length {
+                            res.push(deserialize(vec, pos, false)?);
+                        }
+                        return Ok(K::MixedList(res));
+                    } else {
+                        return Err(e);
+                    }
+                }
             };
             if k_type == 10 {
                 deserialize_series(&vec[*pos..end_pos], k_type, false)
@@ -214,8 +228,8 @@ pub fn deserialize(vec: &Vec<u8>, pos: &mut usize) -> Result<K, KolaError> {
         }
         99 => {
             if vec[*pos] == 98 {
-                let mut key_df: DataFrame = deserialize(vec, pos)?.try_into()?;
-                let value_df: DataFrame = deserialize(vec, pos)?.try_into()?;
+                let mut key_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
+                let value_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
                 unsafe { key_df.hstack_mut_unchecked(value_df.get_columns()) };
                 Ok(K::DataFrame(key_df))
             } else {
@@ -346,6 +360,9 @@ fn calculate_array_end_index(
                 return Ok(pos);
             }
             let sub_k_type = vec[pos];
+            if sub_k_type > 19 {
+                return Err(KolaError::NotSupportedKMixedListErr(sub_k_type, vec[pos]));
+            }
             let k_size = K_TYPE_SIZE[sub_k_type as usize];
             if let 1 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 12 = sub_k_type {
                 for _ in 0..length {
@@ -974,27 +991,27 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
         K::Short(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write(&[251]).unwrap();
-            vec.write(&k.to_le_bytes()).unwrap();
+            vec.write(&NativeType::to_le_bytes(k)).unwrap();
         }
         K::Int(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write(&[250]).unwrap();
-            vec.write(&k.to_le_bytes()).unwrap();
+            vec.write(&NativeType::to_le_bytes(k)).unwrap();
         }
         K::Long(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write(&[249]).unwrap();
-            vec.write(&k.to_le_bytes()).unwrap();
+            vec.write(&NativeType::to_le_bytes(k)).unwrap();
         }
         K::Real(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write(&[248]).unwrap();
-            vec.write(&k.to_le_bytes()).unwrap();
+            vec.write(&NativeType::to_le_bytes(k)).unwrap();
         }
         K::Float(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write(&[247]).unwrap();
-            vec.write(&k.to_le_bytes()).unwrap();
+            vec.write(&NativeType::to_le_bytes(k)).unwrap();
         }
         K::Char(k) => {
             vec = Vec::with_capacity(k_length);
@@ -1042,6 +1059,14 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             vec.write(&[240]).unwrap();
             let ns = k.num_nanoseconds();
             vec.write(&(ns.unwrap_or(i64::MIN)).to_le_bytes()).unwrap();
+        }
+        K::MixedList(l) => {
+            vec = Vec::with_capacity(k_length);
+            vec.write(&[0, 0]).unwrap();
+            vec.write(&(l.len() as u32).to_le_bytes()).unwrap();
+            for atom in l.iter() {
+                vec.write(&serialize(atom)?).unwrap();
+            }
         }
         // to list
         K::Series(k) => {
@@ -1786,7 +1811,7 @@ mod tests {
     #[test]
     fn deserialize_and_serialize_boolean_list() {
         let vec = [1, 0, 2, 0, 0, 0, 1, 0].to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect =
             Series::from_arrow(name, BooleanArray::from([Some(true), Some(false)]).boxed())
@@ -1803,7 +1828,7 @@ mod tests {
             242, 64, 77, 90, 236, 247, 200, 171, 186, 226, 136,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let binary_array = FixedSizeBinaryArray::new(
             ArrowDataType::FixedSizeBinary(16),
@@ -1825,7 +1850,7 @@ mod tests {
     #[test]
     fn deserialize_and_serialize_byte_list() {
         let vec = [4, 0, 2, 0, 0, 0, 0, 1].to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect =
             Series::from_arrow(name, UInt8Array::from([Some(0), Some(1)]).boxed()).unwrap();
@@ -1837,7 +1862,7 @@ mod tests {
     #[test]
     fn deserialize_and_serialize_short_list() {
         let vec = [5, 0, 4, 0, 0, 0, 0, 128, 1, 128, 0, 0, 255, 127].to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -1855,7 +1880,7 @@ mod tests {
             6, 0, 4, 0, 0, 0, 0, 0, 0, 128, 1, 0, 0, 128, 0, 0, 0, 0, 255, 255, 255, 127,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect =
             Series::from_arrow(name, Int32Array::from([None, None, Some(0), None]).boxed())
@@ -1876,7 +1901,7 @@ mod tests {
             0, 0, 255, 255, 255, 255, 255, 255, 255, 127,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect =
             Series::from_arrow(name, Int64Array::from([None, None, Some(0), None]).boxed())
@@ -1897,7 +1922,7 @@ mod tests {
             8, 0, 4, 0, 0, 0, 0, 0, 192, 127, 0, 0, 128, 255, 0, 0, 0, 0, 0, 0, 128, 127,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -1922,7 +1947,7 @@ mod tests {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 127,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -1943,7 +1968,7 @@ mod tests {
     #[test]
     fn deserialize_and_serialize_symbol_list() {
         let vec = [11, 0, 3, 0, 0, 0, 97, 0, 0, 97, 98, 99, 0].to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -1968,7 +1993,7 @@ mod tests {
             97, 98, 99,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[6] as usize];
         let expect = Series::from_arrow(
             name,
@@ -1987,7 +2012,7 @@ mod tests {
             199, 153, 133, 126, 114, 10,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -2010,7 +2035,7 @@ mod tests {
             14, 0, 3, 0, 0, 0, 9, 34, 0, 0, 0, 0, 0, 128, 220, 210, 169, 5,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -2034,7 +2059,7 @@ mod tests {
             27, 195, 4, 193, 64, 0, 0, 0, 0, 0, 0, 240, 127,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -2057,7 +2082,7 @@ mod tests {
             0, 0, 0, 128, 255, 255, 255, 255, 255, 255, 255, 127,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -2080,7 +2105,7 @@ mod tests {
             17, 0, 4, 0, 0, 0, 0, 0, 0, 128, 242, 2, 0, 0, 1, 0, 0, 128, 255, 255, 255, 127,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -2102,7 +2127,7 @@ mod tests {
             18, 0, 4, 0, 0, 0, 0, 0, 0, 128, 240, 176, 0, 0, 1, 0, 0, 128, 255, 255, 255, 127,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -2124,7 +2149,7 @@ mod tests {
             19, 0, 4, 0, 0, 0, 0, 0, 0, 128, 149, 44, 179, 2, 0, 0, 0, 0, 255, 91, 38, 5,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name,
@@ -2148,7 +2173,7 @@ mod tests {
             1,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 1, 3, 6].to_vec()).unwrap();
@@ -2177,7 +2202,7 @@ mod tests {
             0,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let array = BooleanArray::from([true, false, true, false, true, false].map(|b| Some(b)));
@@ -2203,7 +2228,7 @@ mod tests {
             0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 0, 0, 4, 0, 1, 0, 0, 0, 1, 4, 0, 2, 0, 0, 0, 1, 2,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
@@ -2232,7 +2257,7 @@ mod tests {
             2, 0,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
@@ -2261,7 +2286,7 @@ mod tests {
             1, 0, 0, 0, 2, 0, 0, 0,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
@@ -2290,7 +2315,7 @@ mod tests {
             2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
@@ -2319,7 +2344,7 @@ mod tests {
             0, 0, 128, 63, 0, 0, 128, 255,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
@@ -2349,7 +2374,7 @@ mod tests {
             2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 63, 0, 0, 0, 0, 0, 0, 240, 255,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
@@ -2378,7 +2403,7 @@ mod tests {
             2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let k_type = vec[6];
         let name = K_TYPE_NAME[k_type as usize];
         let offsets = OffsetsBuffer::<i32>::try_from([0, 0, 1, 3].to_vec()).unwrap();
@@ -2401,13 +2426,30 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_and_serialize_mixed_list() {
+        let vec = [
+            0, 0, 3, 0, 0, 0, 245, 117, 112, 100, 0, 245, 116, 0, 98, 0, 99, 11, 0, 1, 0, 0, 0, 97,
+            0, 0, 0, 1, 0, 0, 0, 7, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        ]
+        .to_vec();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
+        let expect = K::MixedList(vec![
+            K::Symbol("upd".to_owned()),
+            K::Symbol("t".to_owned()),
+            K::DataFrame(DataFrame::new(vec![Series::new("a", [1i64].as_ref())]).unwrap()),
+        ]);
+        assert_eq!(k, expect);
+        assert_eq!(vec, serialize(&expect).unwrap());
+    }
+
+    #[test]
     fn deserialize_and_serialize_table() {
         let vec = [
             98, 0, 99, 11, 0, 2, 0, 0, 0, 97, 0, 98, 0, 0, 0, 2, 0, 0, 0, 7, 0, 1, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 9, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 63,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let df: DataFrame = k.try_into().unwrap();
         let s0 = Series::new("a", [1i64].as_ref());
         let s1 = Series::new("b", [1.0f64].as_ref());
@@ -2424,7 +2466,7 @@ mod tests {
             0, 0, 0, 0, 0, 0, 0, 240, 63,
         ]
         .to_vec();
-        let k = deserialize(&vec, &mut 0).unwrap();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
         let df: DataFrame = k.try_into().unwrap();
         let s0 = Series::new("a", [1i64].as_ref());
         let s1 = Series::new("b", [1.0f64].as_ref());

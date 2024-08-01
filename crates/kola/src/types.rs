@@ -1,3 +1,5 @@
+use std::usize;
+
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use polars::{
     datatypes::DataType as PolarsDataType,
@@ -19,13 +21,13 @@ pub enum MsgType {
     Response = 2,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Dict {
     keys: Box<Vec<String>>,
     values: Box<Vec<K>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum K {
     Bool(bool),
     Guid(Uuid),
@@ -42,6 +44,7 @@ pub enum K {
     Date(NaiveDate),         // date
     Time(NaiveTime),         // time, minute, second
     Duration(Duration),      // timespan
+    MixedList(Vec<K>),       // mixed list
     Series(Series),          // list, dictionaries
     DataFrame(DataFrame),    // table and keyed table
     Dict(Dict),              // dict, symbols -> atom or list
@@ -67,6 +70,13 @@ impl K {
             K::Date(_) => Ok(5),
             K::Time(_) => Ok(5),
             K::Duration(_) => Ok(9),
+            K::MixedList(l) => {
+                let lens = l
+                    .iter()
+                    .map(|k| k.len())
+                    .collect::<Result<Vec<_>, KolaError>>();
+                Ok(lens?.into_iter().sum::<usize>() + 6)
+            }
             K::Series(series) => get_series_len(series),
             K::DataFrame(df) => {
                 // 98 0 99 + symbol list(6) + values(6)

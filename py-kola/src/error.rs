@@ -20,7 +20,9 @@ impl std::convert::From<PyKolaError> for PyErr {
         use PyKolaError::*;
         match &err {
             KolaError(e) => match e {
-                KolaOrigError::IOError(_) => QKolaIOError::new_err(err.to_string()),
+                KolaOrigError::IOError(_) | KolaOrigError::NotConnectedErr() => {
+                    QKolaIOError::new_err(err.to_string())
+                }
                 KolaOrigError::AuthErr() => QKolaAuthError::new_err(err.to_string()),
                 _ => QKolaError::new_err(err.to_string()),
             },

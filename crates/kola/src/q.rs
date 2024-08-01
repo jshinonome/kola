@@ -168,14 +168,14 @@ impl Q {
                 length = u32::from_le_bytes(vec[..4].try_into().unwrap()) as usize;
                 let mut de_vec = vec![0u8; length - 8];
                 decompress(&vec, &mut de_vec, 4);
-                deserialize(&de_vec, &mut 0)
+                deserialize(&de_vec, &mut 0, false)
             } else if compression_mode == 2 {
                 length = u64::from_le_bytes(vec[..8].try_into().unwrap()) as usize;
                 let mut de_vec = vec![0u8; length - 8];
                 decompress(&vec, &mut de_vec, 8);
-                deserialize(&de_vec, &mut 0)
+                deserialize(&de_vec, &mut 0, false)
             } else {
-                deserialize(&vec, &mut 0)
+                deserialize(&vec, &mut 0, false)
             }
         } else {
             Err(KolaError::NotConnectedErr())
