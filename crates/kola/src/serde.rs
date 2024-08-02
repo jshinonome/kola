@@ -775,18 +775,18 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
                 field = create_field(k_type, "float").unwrap();
             } else if k_type == 12 {
                 let new_ptr: *mut i64 = v8.as_mut_ptr().cast();
-                let slice = unsafe { core::slice::from_raw_parts_mut(new_ptr, v8.len() / k_size) };
-                slice.iter_mut().for_each(|ns| {
-                    if *ns > i64::MIN {
-                        *ns = ns.saturating_add(NANOS_DIFF)
-                    }
-                });
+                let slice = unsafe { core::slice::from_raw_parts(new_ptr, v8.len() / k_size) };
+                let slice = slice
+                    .into_iter()
+                    .map(|ns| match *ns {
+                        i64::MIN => *ns,
+                        _ => ns.saturating_add(NANOS_DIFF),
+                    })
+                    .collect::<Vec<_>>();
                 let bitmap = Bitmap::from_iter(slice.iter().map(|s| *s != i64::MIN));
                 let array = PrimitiveArray::new(
                     ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                    unsafe {
-                        Vec::from_raw_parts(slice.as_mut_ptr(), slice.len(), slice.len()).into()
-                    },
+                    slice.into(),
                     Some(bitmap),
                 );
                 array_box = array.boxed();

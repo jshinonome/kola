@@ -118,6 +118,9 @@ df.with_columns([
 import polars as pl
 import kola
 q = kola.Q('localhost', 1800)
+
+# with retries for IO Errors, 1s, 2s, 4s ...
+q = kola.Q('localhost', 1800, retries=3)
 ```
 
 #### Connect(Optional)
@@ -180,6 +183,26 @@ q.sync("upsert", "table", pl.DataFrame(pd_df))
 ```python
 # pl_df is a Polars DataFrame
 q.asyn("upsert", "table", pl_df)
+```
+
+### Subscribe
+
+```python
+from kola import QType
+
+q.sync(".u.sub", pl.Series("", ["table1", "table2"], QType.Symbol), "")
+
+# specify symbol filter
+q.sync(
+    ".u.sub",
+    pl.Series("", ["table1", "table2"], QType.Symbol),
+    pl.Series("", ["sym1", "sym2"], QType.Symbol),
+)
+
+while true:
+    # ("upd", "table", pl.Dataframe)
+    upd = self.q.receive()
+    print(upd)
 ```
 
 #### Polars Documentations
