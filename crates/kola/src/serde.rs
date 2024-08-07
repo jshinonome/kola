@@ -1090,10 +1090,10 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             vec.write(&[0, 0]).unwrap();
             let columns = k.get_columns();
             vec.write(&column_count.to_le_bytes()).unwrap();
-            let vectors: Vec<Vec<u8>> = columns
+            let vectors = columns
                 .into_par_iter()
-                .map(|s| serialize_series(s, get_series_len(s).unwrap()).unwrap())
-                .collect();
+                .map(|s| serialize_series(s, get_series_len(s).unwrap()))
+                .collect::<Result<Vec<Vec<u8>>, KolaError>>()?;
             vectors.into_iter().for_each(|v| {
                 vec.write(&v).unwrap();
             });
@@ -1759,6 +1759,9 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     }
                 });
             });
+        }
+        PolarsDataType::Null if k_length == 0 => {
+            vec.write(&[0, 0, 0, 0, 0, 0]).unwrap();
         }
         _ => return Err(KolaError::NotSupportedSeriesTypeErr(series.dtype().clone())),
     }
