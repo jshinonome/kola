@@ -366,11 +366,15 @@ fn calculate_array_end_index(
             let k_size = K_TYPE_SIZE[sub_k_type as usize];
             if let 1 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 12 = sub_k_type {
                 for _ in 0..length {
-                    if sub_k_type != vec[pos] {
+                    let current_k_type = vec[pos];
+                    if sub_k_type != current_k_type && current_k_type != 0 {
                         return Err(KolaError::NotSupportedKMixedListErr(sub_k_type, vec[pos]));
                     }
                     pos += 2;
                     let sub_length = i32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap());
+                    if current_k_type == 0 && sub_length > 0 {
+                        return Err(KolaError::NotSupportedKMixedListErr(sub_k_type, vec[pos]));
+                    }
                     pos += 4;
                     pos += k_size * sub_length as usize;
                 }
