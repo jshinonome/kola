@@ -189,6 +189,11 @@ def test_read_atom(q, query, expect):
             "(1 2;();3 4)",
             pl.Series("long", [[1, 2], [], [3, 4]]),
         ),
+        # empty list
+        (
+            "()",
+            pl.Series("null", []),
+        ),
     ],
 )
 def test_read_list(q, query, expect):

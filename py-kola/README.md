@@ -208,6 +208,21 @@ while true:
     print(upd)
 ```
 
+### Generate IPC
+
+```python
+import polars as pl
+from kola import generate_ipc
+
+df = pl.DataFrame(
+    {
+        "sym": pl.Series("sym", ["a", "b", "c"], pl.Categorical),
+        "price": [1, 2, 3],
+    }
+)
+buffer = generate_ipc("sync", ["upd", "table", df])
+```
+
 #### Polars Documentations
 
 Refer to

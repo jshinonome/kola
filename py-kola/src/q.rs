@@ -4,7 +4,7 @@ use crate::error::PyKolaError::{self, PythonError};
 use crate::error::QKolaError;
 use chrono::{Datelike, Timelike};
 use kola::q::Q;
-use kola::types::{Dict, K};
+use kola::types::{Dict, MsgType, K};
 use pyo3::types::{
     timezone_utc_bound, PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt,
     PyList, PyString, PyTime, PyTuple,
@@ -203,8 +203,6 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
     } else if any.is_instance_of::<PyBytes>() {
         let value = any.downcast::<PyBytes>()?;
         Ok(K::String(String::from_utf8(value.as_bytes().to_vec())?))
-    } else if any.is_instance_of::<PyList>() || any.is_instance_of::<PyTuple>() {
-        return Err(PythonError("not support serialize python list/tuple".to_string()).into());
     } else if any.hasattr(intern!(any.py(), "_s"))? {
         let series = any.extract::<PySeries>()?.into();
         Ok(K::Series(series))
@@ -242,6 +240,13 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
                 .map_err(|e| PyErr::new::<QKolaError, _>(e.to_string()))?;
         }
         Ok(K::Dict(dict))
+    } else if any.is_instance_of::<PyList>() {
+        let py_list = any.downcast::<PyList>()?;
+        let mut k_list = Vec::with_capacity(py_list.len());
+        for py_any in py_list {
+            k_list.push(cast_to_k(py_any)?);
+        }
+        Ok(K::MixedList(k_list))
     } else {
         Err(PythonError(format!("Not supported python type {:?}", any.get_type(),)).into())
     }
@@ -252,4 +257,23 @@ pub fn read_binary_table(filepath: &str) -> PyResult<PyDataFrame> {
     kola::io::read_binary_table(filepath)
         .map_err(|e| PyKolaError::from(e).into())
         .map(|df| PyDataFrame(df))
+}
+
+#[pyfunction]
+pub fn generate_ipc_msg<'a>(
+    py: Python<'a>,
+    msg_type: u8,
+    any: Bound<PyAny>,
+) -> PyResult<Bound<'a, PyBytes>> {
+    let msg_type = if msg_type == 0 {
+        MsgType::Async
+    } else if msg_type == 1 {
+        MsgType::Sync
+    } else {
+        MsgType::Response
+    };
+    match kola::io::generate_ipc_msg(msg_type, cast_to_k(any)?) {
+        Ok(bytes) => Ok(PyBytes::new_bound(py, &bytes)),
+        Err(e) => Err(PyKolaError::from(e).into()),
+    }
 }
