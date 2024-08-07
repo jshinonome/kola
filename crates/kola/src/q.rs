@@ -5,6 +5,7 @@ use native_tls::TlsConnector;
 use std::error::Error;
 use std::io::{self, Read as IoRead, Write as IoWrite};
 use std::net::{Shutdown, TcpStream};
+use std::time::Duration;
 pub(crate) trait QStream: IoRead + IoWrite {
     fn shutdown(&self, how: Shutdown) -> io::Result<()>;
 }
@@ -22,11 +23,19 @@ pub struct Q {
     pub password: String,
     pub enable_tls: bool,
     pub is_local: bool,
+    pub timeout: Duration,
     stream: Option<Box<dyn QStream + Send>>,
 }
 
 impl Q {
-    pub fn new(host: &str, port: u16, user: &str, password: &str, enable_tls: bool) -> Self {
+    pub fn new(
+        host: &str,
+        port: u16,
+        user: &str,
+        password: &str,
+        enable_tls: bool,
+        timeout: u64,
+    ) -> Self {
         let host = if host.is_empty() { "127.0.0.1" } else { host };
         let is_local = if host == "127.0.0.1" || host == "localhost" {
             true
@@ -41,6 +50,7 @@ impl Q {
             enable_tls,
             stream: None,
             is_local,
+            timeout: Duration::new(timeout, 0),
         }
     }
 
@@ -191,6 +201,12 @@ impl Q {
                 Ok(stream) => stream,
                 Err(e) => return Err(KolaError::IOError(e)),
             };
+
+            if !self.timeout.is_zero() {
+                tcp_stream
+                    .set_read_timeout(Some(self.timeout))
+                    .map_err(|e| KolaError::IOError(e))?;
+            }
 
             if self.enable_tls {
                 let connector = TlsConnector::builder()

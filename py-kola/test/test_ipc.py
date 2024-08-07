@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import polars as pl
 import pytest
 
-from kola import QKolaError
+from kola import Q, QKolaError, QKolaIOError
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +202,15 @@ def test_auto_connect(q):
     q.disconnect()
     q.sync(".z.p")
     q.connect()
+
+
+def test_io_error():
+    q = Q("DUMMY", 1800)
+    with pytest.raises(
+        QKolaIOError,
+        match="failed to lookup address information: Name or service not known",
+    ):
+        q.sync("1+`a")
 
 
 def test_asyn(q):

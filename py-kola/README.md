@@ -121,6 +121,9 @@ q = kola.Q('localhost', 1800)
 
 # with retries for IO Errors, 1s, 2s, 4s ...
 q = kola.Q('localhost', 1800, retries=3)
+
+# with read timeout error, 2s, "Resource temporarily unavailable"
+q = kola.Q('localhost', 1800, retries=3, timeout=2)
 ```
 
 #### Connect(Optional)

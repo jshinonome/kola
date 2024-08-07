@@ -23,14 +23,21 @@ pub struct QConnector {
 }
 
 impl QConnector {
-    pub(crate) fn new(host: &str, port: u16, user: &str, password: &str, enable_tls: bool) -> Self {
+    pub(crate) fn new(
+        host: &str,
+        port: u16,
+        user: &str,
+        password: &str,
+        enable_tls: bool,
+        timeout: u64,
+    ) -> Self {
         QConnector {
             host: host.to_string(),
             port,
             user: user.to_string(),
             password: password.to_string(),
             enable_tls,
-            q: Q::new(host, port, user, password, enable_tls),
+            q: Q::new(host, port, user, password, enable_tls, timeout),
         }
     }
 
@@ -129,8 +136,11 @@ impl QConnector {
         user: &str,
         password: &str,
         enable_tls: bool,
+        timeout: u64,
     ) -> PyResult<Self> {
-        Ok(QConnector::new(host, port, user, password, enable_tls))
+        Ok(QConnector::new(
+            host, port, user, password, enable_tls, timeout,
+        ))
     }
 
     pub fn connect(&mut self) -> Result<(), PyKolaError> {

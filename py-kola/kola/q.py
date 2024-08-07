@@ -19,6 +19,7 @@ class Q(object):
         passwd="",
         enable_tls=False,
         retries=0,
+        timeout=0,
     ):
         if not user:
             try:
@@ -31,7 +32,7 @@ class Q(object):
         self.port = port
         self.user = user
         self.retries = retries
-        self.q = QConnector(host, port, user, passwd, enable_tls)
+        self.q = QConnector(host, port, user, passwd, enable_tls, timeout)
 
     def connect(self):
         self.q.connect()
@@ -54,6 +55,8 @@ class Q(object):
                     )
                     time.sleep(2**n)
                     n += 1
+                    if n == self.retries:
+                        raise (e)
 
     def asyn(self, expr: str, *args):
         if self.retries <= 0:
@@ -70,6 +73,8 @@ class Q(object):
                     )
                     time.sleep(2**n)
                     n += 1
+                    if n == self.retries:
+                        raise (e)
 
     def receive(self):
         if self.retries <= 0:
@@ -87,3 +92,5 @@ class Q(object):
                     self.connect()
                     time.sleep(2**n)
                     n += 1
+                    if n == self.retries:
+                        raise (e)
