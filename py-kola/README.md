@@ -220,7 +220,11 @@ df = pl.DataFrame(
         "price": [1, 2, 3],
     }
 )
-buffer = generate_ipc("sync", ["upd", "table", df])
+# without compression
+buffer = generate_ipc("sync", False, ["upd", "table", df])
+
+# with compression
+buffer = generate_ipc("sync", True, ["upd", "table", df])
 ```
 
 #### Polars Documentations
