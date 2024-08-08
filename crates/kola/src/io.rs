@@ -8,7 +8,7 @@ use polars::frame::DataFrame;
 use xxhash_rust::xxh32;
 
 use crate::errors::KolaError;
-use crate::serde::{deserialize, serialize};
+use crate::serde::{compress, deserialize, serialize};
 use crate::types::{MsgType, K};
 
 pub fn read_binary_table(path: &str) -> Result<DataFrame, KolaError> {
@@ -74,13 +74,21 @@ pub fn unzip_lz4(buf: &Vec<u8>, footer_index: usize, block_num: usize) -> Vec<u8
     unzipped_bytes
 }
 
-pub fn generate_ipc_msg(msg_type: MsgType, k: K) -> Result<Vec<u8>, KolaError> {
+pub fn generate_ipc_msg(
+    msg_type: MsgType,
+    enable_compression: bool,
+    k: K,
+) -> Result<Vec<u8>, KolaError> {
     let length = k.len()?;
     let mut vec: Vec<u8> = Vec::with_capacity(length + 8);
     vec.write(&[1, msg_type as u8, 0, 0]).unwrap();
     vec.write(&(length as u32 + 8).to_le_bytes()).unwrap();
     vec.write(&serialize(&k)?).unwrap();
-    Ok(vec)
+    if enable_compression {
+        Ok(compress(vec))
+    } else {
+        Ok(vec)
+    }
 }
 
 #[cfg(test)]

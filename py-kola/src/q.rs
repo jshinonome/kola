@@ -263,6 +263,7 @@ pub fn read_binary_table(filepath: &str) -> PyResult<PyDataFrame> {
 pub fn generate_ipc_msg<'a>(
     py: Python<'a>,
     msg_type: u8,
+    enable_compression: bool,
     any: Bound<PyAny>,
 ) -> PyResult<Bound<'a, PyBytes>> {
     let msg_type = if msg_type == 0 {
@@ -272,7 +273,7 @@ pub fn generate_ipc_msg<'a>(
     } else {
         MsgType::Response
     };
-    match kola::io::generate_ipc_msg(msg_type, cast_to_k(any)?) {
+    match kola::io::generate_ipc_msg(msg_type, enable_compression, cast_to_k(any)?) {
         Ok(bytes) => Ok(PyBytes::new_bound(py, &bytes)),
         Err(e) => Err(PyKolaError::from(e).into()),
     }
