@@ -1,9 +1,10 @@
 use std::usize;
 
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
+use indexmap::IndexMap;
 use polars::{
     datatypes::DataType as PolarsDataType,
-    prelude::{DataFrame, LargeListArray},
+    prelude::{AnyValue, DataFrame, LargeListArray, TimeUnit},
     series::Series,
 };
 use polars_arrow::array::{FixedSizeListArray, ValueSize};
@@ -22,12 +23,6 @@ pub enum MsgType {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Dict {
-    keys: Box<Vec<String>>,
-    values: Box<Vec<K>>,
-}
-
-#[derive(Debug, PartialEq)]
 pub enum K {
     Bool(bool),
     Guid(Uuid),
@@ -40,14 +35,14 @@ pub enum K {
     Char(u8),
     Symbol(String),
     String(String),
-    DateTime(DateTime<Utc>), // datetime, timestamp
-    Date(NaiveDate),         // date
-    Time(NaiveTime),         // time, minute, second
-    Duration(Duration),      // timespan
-    MixedList(Vec<K>),       // mixed list
-    Series(Series),          // list, dictionaries
-    DataFrame(DataFrame),    // table and keyed table
-    Dict(Dict),              // dict, symbols -> atom or list
+    DateTime(DateTime<Utc>),   // datetime, timestamp
+    Date(NaiveDate),           // date
+    Time(NaiveTime),           // time, minute, second
+    Duration(Duration),        // timespan
+    MixedList(Vec<K>),         // mixed list
+    Series(Series),            // list, dictionaries
+    DataFrame(DataFrame),      // table and keyed table
+    Dict(IndexMap<String, K>), // dict, symbols -> atom or list
     None(u8),
 }
 
@@ -90,16 +85,47 @@ impl K {
             K::None(_) => Ok(2),
             K::Dict(dict) => {
                 let mut length = 13;
-                dict.keys()
-                    .as_ref()
-                    .iter()
-                    .for_each(|key| length += key.len() + 1);
-                dict.values()
-                    .as_ref()
-                    .iter()
-                    .for_each(|k| length += k.len().unwrap());
+                for (k, v) in dict.iter() {
+                    length += k.len() + 1;
+                    length += v.len()?;
+                }
                 Ok(length)
             }
+        }
+    }
+
+    pub fn from_any_value(a: AnyValue) -> K {
+        match a {
+            AnyValue::Boolean(b) => K::Bool(b),
+            AnyValue::String(s) => K::String(s.to_owned()),
+            AnyValue::UInt8(v) => K::Byte(v),
+            AnyValue::Int16(v) => K::Short(v),
+            AnyValue::Int32(v) => K::Int(v),
+            AnyValue::Int64(v) => K::Long(v),
+            AnyValue::Float32(v) => K::Real(v),
+            AnyValue::Float64(v) => K::Float(v),
+            AnyValue::Date(v) => K::Date(NaiveDate::from_num_days_from_ce_opt(v + 719163).unwrap()),
+            AnyValue::Datetime(v, TimeUnit::Milliseconds, _) => {
+                K::DateTime(DateTime::from_timestamp_nanos(v * 1000000))
+            }
+            AnyValue::Datetime(v, TimeUnit::Nanoseconds, _) => {
+                K::DateTime(DateTime::from_timestamp_nanos(v))
+            }
+            AnyValue::Duration(v, TimeUnit::Nanoseconds) => K::Duration(Duration::nanoseconds(v)),
+            AnyValue::Time(v) => K::Time(
+                NaiveTime::from_num_seconds_from_midnight_opt(
+                    (v / 1000000000) as u32,
+                    (v % 1000000000) as u32,
+                )
+                .unwrap(),
+            ),
+            AnyValue::Categorical(i, g, _) => {
+                let sym = g.get(i);
+                K::Symbol(sym.to_owned())
+            }
+            AnyValue::List(s) => K::Series(s),
+            AnyValue::StringOwned(s) => K::String(s.to_string()),
+            _ => K::None(0),
         }
     }
 }
@@ -215,55 +241,5 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
             Ok(length)
         }
         _ => Err(KolaError::NotSupportedSeriesTypeErr(data_type.clone())),
-    }
-}
-
-impl Dict {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Dict {
-            keys: Box::new(Vec::with_capacity(capacity)),
-            values: Box::new(Vec::with_capacity(capacity)),
-        }
-    }
-    pub fn set(&mut self, key: String, value: K) -> Result<(), KolaError> {
-        if self.keys.len() < self.keys.capacity() {
-            match value {
-                K::Bool(_)
-                | K::Byte(_)
-                | K::Short(_)
-                | K::Int(_)
-                | K::Long(_)
-                | K::Real(_)
-                | K::Float(_)
-                | K::Char(_)
-                | K::Symbol(_)
-                | K::String(_)
-                | K::DateTime(_)
-                | K::Date(_)
-                | K::Time(_)
-                | K::Duration(_)
-                | K::Series(_)
-                | K::DataFrame(_)
-                | K::None(_) => {
-                    self.keys.push(key);
-                    self.values.push(value);
-                    Ok(())
-                }
-                // K::Guid(_) => todo!(),
-                _ => Err(KolaError::Err(format!(
-                    "Not support {:?} as value of dict",
-                    value
-                ))),
-            }
-        } else {
-            Err(KolaError::Err("Exceed capacity of dict".to_string()))
-        }
-    }
-    pub fn keys(&self) -> &Box<Vec<String>> {
-        &self.keys
-    }
-
-    pub fn values(&self) -> &Box<Vec<K>> {
-        &self.values
     }
 }

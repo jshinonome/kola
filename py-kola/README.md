@@ -108,7 +108,7 @@ df.with_columns([
 | `pl.Time`                | time      |
 | `pl.DataFrame`           | table     |
 
-> Limited Support for dictionary as arguments, python `string` as keys and Python `Basic Data Types` and `pl.Series` as values.
+> Limited Support for dictionary as arguments, requires `string` as keys.
 
 ### Quick Start
 

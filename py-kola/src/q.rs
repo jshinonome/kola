@@ -1,10 +1,10 @@
 use std::cmp::{max, min};
 
 use crate::error::PyKolaError::{self, PythonError};
-use crate::error::QKolaError;
 use chrono::{Datelike, Timelike};
+use indexmap::IndexMap;
 use kola::q::Q;
-use kola::types::{Dict, MsgType, K};
+use kola::types::{MsgType, K};
 use pyo3::types::{
     timezone_utc_bound, PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt,
     PyList, PyString, PyTime, PyTuple,
@@ -123,7 +123,13 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
         K::Series(k) => Ok(PySeries(k).into_py(py)),
         K::DataFrame(k) => Ok(PyDataFrame(k).into_py(py)),
         K::None(_) => Ok(().to_object(py)),
-        K::Dict(_) => todo!("No plan to support deserializing dictionary"),
+        K::Dict(dict) => {
+            let py_dict = PyDict::new_bound(py);
+            for (k, v) in dict.into_iter() {
+                py_dict.set_item(k, cast_k_to_py(py, v)?)?;
+            }
+            Ok(py_dict.into())
+        }
     }
 }
 
@@ -225,7 +231,7 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
         Ok(K::Duration(py_delta.extract()?))
     } else if any.is_instance_of::<PyDict>() {
         let py_dict = any.downcast::<PyDict>()?;
-        let mut dict = Dict::with_capacity(py_dict.len());
+        let mut dict = IndexMap::with_capacity(py_dict.len());
         for (k, v) in py_dict.into_iter() {
             let k = match k.extract::<&str>() {
                 Ok(s) => s.to_string(),
@@ -236,8 +242,7 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
                 }
             };
             let v = cast_to_k(v)?;
-            dict.set(k, v)
-                .map_err(|e| PyErr::new::<QKolaError, _>(e.to_string()))?;
+            dict.insert(k, v);
         }
         Ok(K::Dict(dict))
     } else if any.is_instance_of::<PyList>() {

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Timelike, Utc};
+use indexmap::IndexMap;
 use polars::chunked_array::ops::{ChunkFillNullValue, FillNullStrategy};
 use polars::datatypes::{
     CategoricalOrdering, DataType as PolarsDataType, TimeUnit as PolarTimeUnit,
@@ -55,7 +56,7 @@ use crate::{
     types::{K, K_TYPE_SIZE},
 };
 
-pub fn deserialize(vec: &Vec<u8>, pos: &mut usize, is_column: bool) -> Result<K, KolaError> {
+pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, KolaError> {
     let k_type = vec[*pos];
     *pos += 1;
     let start_pos = *pos;
@@ -232,9 +233,39 @@ pub fn deserialize(vec: &Vec<u8>, pos: &mut usize, is_column: bool) -> Result<K,
                 let value_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
                 unsafe { key_df.hstack_mut_unchecked(value_df.get_columns()) };
                 Ok(K::DataFrame(key_df))
+            } else if vec[*pos] == 11 {
+                *pos += 1;
+                let end_pos = calculate_array_end_index(vec, *pos, 11)?;
+                let keys = deserialize_series(&vec[*pos..end_pos], 11, true)?;
+                *pos = end_pos;
+                if vec[end_pos] > 19 {
+                    return Err(KolaError::Err(format!(
+                        "Not support k type {:?} values in dictionary",
+                        vec[end_pos]
+                    )));
+                }
+                let values = deserialize(vec, pos, is_column)?;
+                let keys = Series::try_from(keys).unwrap();
+                match values {
+                    K::Series(s) => {
+                        let mut dict = IndexMap::with_capacity(keys.len());
+                        for (k, v) in keys.categorical().unwrap().iter_str().zip(s.iter()) {
+                            dict.insert(k.unwrap().to_string(), K::from_any_value(v));
+                        }
+                        Ok(K::Dict(dict))
+                    }
+                    K::MixedList(l) => {
+                        let mut dict = IndexMap::with_capacity(keys.len());
+                        for (k, v) in keys.categorical().unwrap().iter_str().zip(l.into_iter()) {
+                            dict.insert(k.unwrap().to_string(), v);
+                        }
+                        Ok(K::Dict(dict))
+                    }
+                    _ => unreachable!(),
+                }
             } else {
                 Err(KolaError::Err(format!(
-                    "Not support k type {:?} in dictionary",
+                    "Only support symbol keys dictionary or keyed table, got k type {:?}",
                     vec[*pos]
                 )))
             }
@@ -345,11 +376,7 @@ fn create_field(k_type: u8, name: &str) -> Result<Field, KolaError> {
     }
 }
 
-fn calculate_array_end_index(
-    vec: &Vec<u8>,
-    start_pos: usize,
-    k_type: u8,
-) -> Result<usize, KolaError> {
+fn calculate_array_end_index(vec: &[u8], start_pos: usize, k_type: u8) -> Result<usize, KolaError> {
     let mut pos = start_pos;
     match k_type {
         0 => {
@@ -1104,7 +1131,7 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             vec.write(&[101, 0]).unwrap();
         }
         K::Dict(dict) => {
-            let keys = dict.keys().as_ref();
+            let keys = dict.keys();
             let length = keys.len() as i32;
             if length == 0 {
                 return Err(KolaError::Err("Not supported empty dictionary".to_string()));
@@ -1118,7 +1145,7 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             });
             vec.write(&[0, 0]).unwrap();
             vec.write(&length.to_le_bytes()).unwrap();
-            dict.values().as_ref().into_iter().for_each(|v| {
+            dict.values().into_iter().for_each(|v| {
                 vec.write(&serialize(v).unwrap()).unwrap();
             });
         }
@@ -1770,13 +1797,14 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
 
 #[cfg(test)]
 mod tests {
+    use indexmap::IndexMap;
     use polars::{datatypes::CategoricalOrdering, prelude::NamedFrom};
     use polars_arrow::{
         array::{BooleanArray, UInt8Array},
         offset::OffsetsBuffer,
     };
 
-    use crate::{serde::*, types::Dict};
+    use crate::serde::*;
 
     #[test]
     fn decompress_msg() {
@@ -2589,17 +2617,17 @@ mod tests {
     }
 
     #[test]
-    fn serialize_dict() {
-        let mut dict = Dict::with_capacity(2);
-        dict.set("a".to_string(), K::Long(1)).unwrap();
-        dict.set("b".to_string(), K::Float(1.0)).unwrap();
+    fn deserialize_and_serialize_dict() {
+        let vec = [
+            99, 11, 0, 2, 0, 0, 0, 97, 0, 98, 0, 0, 0, 2, 0, 0, 0, 249, 1, 0, 0, 0, 0, 0, 0, 0,
+            247, 0, 0, 0, 0, 0, 0, 240, 63,
+        ]
+        .to_vec();
+        let mut dict = IndexMap::with_capacity(2);
+        dict.insert("a".to_string(), K::Long(1));
+        dict.insert("b".to_string(), K::Float(1.0));
         let k = K::Dict(dict);
-        assert_eq!(
-            serialize(&k).unwrap(),
-            [
-                99, 11, 0, 2, 0, 0, 0, 97, 0, 98, 0, 0, 0, 2, 0, 0, 0, 249, 1, 0, 0, 0, 0, 0, 0, 0,
-                247, 0, 0, 0, 0, 0, 0, 240, 63
-            ]
-        );
+        assert_eq!(deserialize(&vec, &mut 0, false).unwrap(), k);
+        assert_eq!(vec, serialize(&k).unwrap());
     }
 }
