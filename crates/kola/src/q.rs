@@ -78,6 +78,7 @@ impl Q {
 
     pub fn send(&mut self, msg_type: MsgType, expr: &str, args: &Vec<K>) -> Result<(), KolaError> {
         if let Some(stream) = &mut self.stream {
+            let expr = expr.trim();
             // serde::serialize(stream, args.get_item(0).unwrap())
             if args.len() == 0 {
                 let length = 8 + 6 + expr.len();
@@ -102,7 +103,13 @@ impl Q {
                 for k in args.into_iter() {
                     vectors.push(serialize(k)?)
                 }
-                let length = 8 + 6 + 6 + expr.len();
+                let is_lambda = expr.starts_with("{") && expr.ends_with("}");
+                let length = if is_lambda {
+                    // 100 and 0
+                    8 + 6 + 6 + 2 + expr.len()
+                } else {
+                    8 + 6 + 6 + expr.len()
+                };
                 let mut total_length = length;
                 for v in vectors.iter() {
                     total_length += v.len();
@@ -113,6 +120,9 @@ impl Q {
                 vec.write(&(total_length as u32).to_le_bytes())?;
                 vec.write(&[0, 0])?;
                 vec.write(&((args.len() + 1) as u32).to_le_bytes())?;
+                if is_lambda {
+                    vec.write(&[100, 0])?;
+                }
                 vec.write(&[10, 0])?;
                 vec.write(&(expr.len() as u32).to_le_bytes())?;
                 vec.write(expr.as_bytes())?;

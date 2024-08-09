@@ -148,6 +148,15 @@ q.disconnect()
 q.sync("select from trade where date=last date")
 ```
 
+#### Lambda Query
+
+When the first string starts with `{` and ends with `}`, it is treated as a lambda.
+
+```python
+d = {"a": 1, "b": 2}
+q.sync("{key x}", d)
+```
+
 #### Functional Query
 
 For functional query, `kola` supports Python [Basic Data Type](#basic-data-type), `pl.Series`, `pl.DataFrame` and Python Dictionary with string keys and Python [Basic Data Type](#basic-data-type) and `pl.Series` values.
