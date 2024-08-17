@@ -110,9 +110,9 @@ df.with_columns([
 
 > Limited Support for dictionary as arguments, requires `string` as keys.
 
-### Quick Start
+## Quick Start
 
-#### Create a Connection
+### Create a Connection
 
 ```python
 import polars as pl
@@ -126,7 +126,7 @@ q = kola.Q('localhost', 1800, retries=3)
 q = kola.Q('localhost', 1800, retries=3, timeout=2)
 ```
 
-#### Connect(Optional)
+### Connect(Optional)
 
 Automatically connect when querying q process
 
@@ -134,7 +134,7 @@ Automatically connect when querying q process
 q.connect()
 ```
 
-#### Disconnect
+### Disconnect
 
 Automatically disconnect if any IO error
 
@@ -142,13 +142,13 @@ Automatically disconnect if any IO error
 q.disconnect()
 ```
 
-#### String Query
+### String Query
 
 ```python
 q.sync("select from trade where date=last date")
 ```
 
-#### Lambda Query
+### Lambda Query
 
 When the first string starts with `{` and ends with `}`, it is treated as a lambda.
 
@@ -157,7 +157,7 @@ d = {"a": 1, "b": 2}
 q.sync("{key x}", d)
 ```
 
-#### Functional Query
+### Functional Query
 
 For functional query, `kola` supports Python [Basic Data Type](#basic-data-type), `pl.Series`, `pl.DataFrame` and Python Dictionary with string keys and Python [Basic Data Type](#basic-data-type) and `pl.Series` values.
 
@@ -178,7 +178,7 @@ q.sync(
 )
 ```
 
-#### Send DataFrame
+### Send DataFrame
 
 ```python
 # pl_df is a Polars DataFrame
@@ -190,7 +190,7 @@ q.sync("upsert", "table", pl_df)
 q.sync("upsert", "table", pl.DataFrame(pd_df))
 ```
 
-#### Async Query
+### Async Query
 
 ```python
 # pl_df is a Polars DataFrame
@@ -236,7 +236,7 @@ buffer = generate_ipc("sync", False, ["upd", "table", df])
 buffer = generate_ipc("sync", True, ["upd", "table", df])
 ```
 
-#### Polars Documentations
+## Polars Documentations
 
 Refer to
 
