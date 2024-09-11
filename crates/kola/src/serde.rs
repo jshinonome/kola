@@ -20,6 +20,7 @@ use polars_arrow::{array::Utf8Array, offset::OffsetsBuffer};
 use rayon::iter::IntoParallelIterator;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::cmp::{max, min};
+use std::i64;
 use std::io::Write;
 use uuid::Uuid;
 // time difference between chrono and q types
@@ -1259,7 +1260,12 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
             let new_series: Series;
             let ptr = if series.null_count() > 0 {
-                new_series = series.fill_null(FillNullStrategy::MinBound).unwrap();
+                new_series = series
+                    .i64()
+                    .unwrap()
+                    .fill_null_with_values(i64::MIN)
+                    .unwrap()
+                    .into_series();
                 new_series.to_physical_repr()
             } else {
                 series.to_physical_repr()
@@ -1409,7 +1415,12 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
             let new_series: Series;
             let ptr = if series.null_count() > 0 {
-                new_series = series.fill_null(FillNullStrategy::MinBound).unwrap();
+                new_series = series
+                    .datetime()
+                    .unwrap()
+                    .fill_null_with_values(i64::MIN)
+                    .unwrap()
+                    .into_series();
                 new_series.to_physical_repr()
             } else {
                 series.to_physical_repr()
@@ -1451,7 +1462,12 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
             let new_series: Series;
             let ptr = if series.null_count() > 0 {
-                new_series = series.fill_null(FillNullStrategy::MinBound).unwrap();
+                new_series = series
+                    .duration()
+                    .unwrap()
+                    .fill_null_with_values(i64::MIN)
+                    .unwrap()
+                    .into_series();
                 new_series.to_physical_repr()
             } else {
                 series.to_physical_repr()
@@ -1477,7 +1493,12 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
             let new_series: Series;
             let ptr = if series.null_count() > 0 {
-                new_series = series.fill_null(FillNullStrategy::MinBound).unwrap();
+                new_series = series
+                    .time()
+                    .unwrap()
+                    .fill_null_with_values(i64::MIN)
+                    .unwrap()
+                    .into_series();
                 new_series.to_physical_repr()
             } else {
                 series.to_physical_repr()
@@ -1798,7 +1819,10 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
 #[cfg(test)]
 mod tests {
     use indexmap::IndexMap;
-    use polars::{datatypes::CategoricalOrdering, prelude::NamedFrom};
+    use polars::{
+        datatypes::CategoricalOrdering,
+        prelude::{CompatLevel, NamedFrom},
+    };
     use polars_arrow::{
         array::{BooleanArray, UInt8Array},
         offset::OffsetsBuffer,
@@ -2017,7 +2041,10 @@ mod tests {
                 CategoricalOrdering::Lexical,
             ))
             .unwrap();
-        assert_eq!(series.to_arrow(0, false), expect.to_arrow(0, false));
+        assert_eq!(
+            series.to_arrow(0, CompatLevel::newest()),
+            expect.to_arrow(0, CompatLevel::newest())
+        );
         assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
