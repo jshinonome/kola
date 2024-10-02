@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin @ git+https://github.com/PyO3/maturin.git@main"]
+requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]

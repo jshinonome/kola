@@ -407,6 +407,20 @@ fn calculate_array_end_index(vec: &[u8], start_pos: usize, k_type: u8) -> Result
                     pos += k_size * sub_length as usize;
                 }
                 Ok(pos)
+            } else if let 11 = sub_k_type {
+                for _ in 0..length {
+                    pos += 2;
+                    let sub_length = i32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap());
+                    pos += 4;
+                    for _ in 0..sub_length {
+                        let mut k = 0;
+                        while vec[pos + k] != 0 {
+                            k += 1;
+                        }
+                        pos += k + 1;
+                    }
+                }
+                Ok(pos)
             } else {
                 Err(KolaError::NotSupportedKNestedListErr(sub_k_type))
             }
@@ -732,6 +746,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
     pos += 4;
     let k_type = vec[pos];
     let k_size = K_TYPE_SIZE[k_type as usize];
+    let name = K_TYPE_NAME[k_type as usize];
     let mut offsets: Vec<i64> = vec![0i64; length + 1];
     let mut v8 = Vec::with_capacity(length * k_size);
     // bool, byte, short, int, long, real, float, string
@@ -745,11 +760,53 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
                 .unwrap();
             pos += k_size * sub_length as usize;
         }
+    } else if let 11 = k_type {
+        let mut sub_offsets: Vec<i64> = Vec::new();
+        sub_offsets.push(0);
+        v8 = Vec::with_capacity(vec.len());
+        for i in 0..length {
+            pos += 2;
+            let sub_length = i32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap());
+            offsets[i + 1] = sub_length as i64 + offsets[i];
+            pos += 4;
+            for _ in 0..sub_length {
+                let mut k = 0;
+                while vec[pos + k] != 0 {
+                    k += 1;
+                }
+                // exclude last 0x00, as sym ends with 0x00
+                v8.write(&vec[pos..pos + k]).unwrap();
+                sub_offsets.push(sub_offsets.last().unwrap() + k as i64);
+                pos += k + 1;
+            }
+        }
+        let array_box = Utf8Array::<i64>::new(
+            ArrowDataType::LargeUtf8,
+            OffsetsBuffer::try_from(sub_offsets).unwrap(),
+            Buffer::from(v8),
+            None,
+        )
+        .boxed();
+
+        let field = create_field(k_type, "symbol").unwrap();
+        let offsets_buf = OffsetsBuffer::<i64>::try_from(offsets).unwrap();
+        let list_array = ListArray::<i32>::new(
+            ArrowDataType::List(Box::new(field)),
+            OffsetsBuffer::<i32>::try_from(&offsets_buf).unwrap(),
+            array_box,
+            None,
+        );
+        let series = Series::from_arrow(name, list_array.boxed()).unwrap();
+        let series = series
+            .cast(&PolarsDataType::List(
+                PolarsDataType::Categorical(None, CategoricalOrdering::Lexical).boxed(),
+            ))
+            .unwrap();
+        return Ok(K::Series(series));
     } else {
         return Err(KolaError::NotSupportedKNestedListErr(k_type));
     }
     let offsets_buf = OffsetsBuffer::<i64>::try_from(offsets).unwrap();
-    let name = K_TYPE_NAME[k_type as usize];
     match k_type {
         1 | 4 | 5 | 6 | 7 | 8 | 9 | 12 => {
             let field: Field;
