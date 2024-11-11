@@ -31,7 +31,7 @@ jobs:
         # manylinux aarch64 openssl doesn't work
         # architecture: [x86-64, aarch64]
         architecture: [x86-64]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
