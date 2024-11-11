@@ -3,7 +3,6 @@
 target
 *.pyc
 *.so
-Cargo.lock
 test*.ipynb
 bmk
 .venv
