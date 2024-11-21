@@ -1050,6 +1050,7 @@ pub fn compress(vec: Vec<u8>) -> Vec<u8> {
         }
         c_vec[n_pos] = n;
         c_vec[0] = vec[0];
+        c_vec[1] = vec[1];
         let c_len = u32::to_le_bytes(c_pos as u32);
         for i in 0..4 {
             c_vec[i + 4] = c_len[i]
@@ -1910,6 +1911,7 @@ mod tests {
     fn compress_msg() {
         let mut vec = [0u8; 2014].to_vec();
         vec[0] = 1;
+        vec[1] = 1;
         vec[4] = 222;
         vec[5] = 7;
         vec[8] = 1;
@@ -1917,7 +1919,7 @@ mod tests {
         vec[11] = 7;
         let c_vec = compress(vec);
         let expected_vec: Vec<u8> = [
-            1, 0, 1, 0, 36, 0, 0, 0, 222, 7, 0, 0, 192, 1, 0, 208, 7, 0, 0, 0, 255, 0, 255, 63, 0,
+            1, 1, 1, 0, 36, 0, 0, 0, 222, 7, 0, 0, 192, 1, 0, 208, 7, 0, 0, 0, 255, 0, 255, 63, 0,
             255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 199,
         ]
         .to_vec();
