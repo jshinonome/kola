@@ -1,4 +1,4 @@
-name: Kola Python Linux Legacy
+name: Kola Python Linux
 
 on:
   workflow_dispatch:
