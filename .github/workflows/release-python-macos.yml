@@ -12,12 +12,6 @@ on:
         description: Dry run
         type: boolean
         default: false
-      os:
-        description: Running OS
-        type: choice
-        options:
-          - macos-latest
-          - windows-latest
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,12 +23,11 @@ defaults:
 
 jobs:
   build-wheels:
-    runs-on: ${{ inputs.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # manylinux aarch64 openssl doesn't work
-        # architecture: [x86-64, aarch64]
+        os: [macos-latest]
         architecture: [x86-64]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
