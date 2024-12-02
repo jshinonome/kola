@@ -1,4 +1,4 @@
-name: Kola Python Other OS
+name: Kola Python macOS
 
 on:
   workflow_dispatch:
