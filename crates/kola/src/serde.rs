@@ -1237,7 +1237,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     if b {
                         vec.write(&[1u8]).unwrap();
                     } else {
-                        unsafe { vec.set_len(vec.len() + 1) };
+                        vec.write(&[0u8]).unwrap();
                     }
                 });
             })
