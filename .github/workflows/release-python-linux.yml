@@ -119,7 +119,6 @@ jobs:
 
   pypi-publish:
     name: Upload release to PyPI
-    # needs: [create-sdist, build-wheels]
     needs: [build-wheels]
     environment:
       name: pypi
@@ -129,11 +128,11 @@ jobs:
       id-token: write
 
     steps:
-      # - name: Download sdist
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: sdist
-      #     path: dist
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist-kola
+          path: dist
 
       - name: Download wheels
         uses: actions/download-artifact@v4

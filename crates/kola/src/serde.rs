@@ -561,7 +561,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 series = Series::from_arrow(name, array_box).unwrap();
                 Ok(K::Series(series))
             } else {
-                Ok(K::String(String::from_utf8(array_vec.to_vec()).unwrap()))
+                Ok(K::String(String::from_utf8_lossy(array_vec).to_string()))
             }
         }
         11 => {
