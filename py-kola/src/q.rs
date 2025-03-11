@@ -41,22 +41,17 @@ impl QConnector {
         }
     }
 
-    fn execute(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
+    fn execute(&mut self, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
         let k = match self.q.execute(expr, &cast_to_k_vec(args)?) {
             Ok(k) => k,
             Err(e) => return Err(PyKolaError::from(e).into()),
         };
-        cast_k_to_py(py, k)
+        Python::with_gil(|py| cast_k_to_py(py, k))
     }
 
-    fn execute_async(
-        &mut self,
-        py: Python,
-        expr: &str,
-        args: Bound<PyTuple>,
-    ) -> Result<PyObject, PyKolaError> {
+    fn execute_async(&mut self, expr: &str, args: Bound<PyTuple>) -> Result<(), PyKolaError> {
         self.q.execute_async(expr, &cast_to_k_vec(args)?)?;
-        Ok(0.to_object(py))
+        Ok(())
     }
 }
 
@@ -164,18 +159,13 @@ impl QConnector {
     }
 
     #[pyo3(signature = (expr, *args))]
-    pub fn sync(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
-        self.execute(py, expr, args)
+    pub fn sync(&mut self, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
+        self.execute(expr, args)
     }
 
     #[pyo3(signature = (expr, *args))]
-    pub fn asyn(
-        &mut self,
-        py: Python,
-        expr: &str,
-        args: Bound<PyTuple>,
-    ) -> Result<PyObject, PyKolaError> {
-        self.execute_async(py, expr, args)
+    pub fn asyn(&mut self, expr: &str, args: Bound<PyTuple>) -> Result<(), PyKolaError> {
+        self.execute_async(expr, args)
     }
 
     pub fn receive(&mut self, py: Python) -> PyResult<PyObject> {

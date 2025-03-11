@@ -38,3 +38,6 @@ lto = "thin"
 strip = "symbols"
 codegen-units = 1
 lto = "fat"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg()'] }
