@@ -41,12 +41,14 @@ impl QConnector {
         }
     }
 
-    fn execute(&mut self, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
-        let k = match self.q.execute(expr, &cast_to_k_vec(args)?) {
+    fn execute(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
+        let args = cast_to_k_vec(args)?;
+        let k = py.allow_threads(move || self.q.execute(expr, &args));
+        let k = match k {
             Ok(k) => k,
             Err(e) => return Err(PyKolaError::from(e).into()),
         };
-        Python::with_gil(|py| cast_k_to_py(py, k))
+        cast_k_to_py(py, k)
     }
 
     fn execute_async(&mut self, expr: &str, args: Bound<PyTuple>) -> Result<(), PyKolaError> {
@@ -159,8 +161,8 @@ impl QConnector {
     }
 
     #[pyo3(signature = (expr, *args))]
-    pub fn sync(&mut self, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
-        self.execute(expr, args)
+    pub fn sync(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
+        self.execute(py, expr, args)
     }
 
     #[pyo3(signature = (expr, *args))]
@@ -169,8 +171,8 @@ impl QConnector {
     }
 
     pub fn receive(&mut self, py: Python) -> PyResult<PyObject> {
-        let k = self.q.receive().map_err(|e| PyKolaError::from(e))?;
-        cast_k_to_py(py, k)
+        let k = py.allow_threads(move || self.q.receive().map_err(|e| PyKolaError::from(e)));
+        cast_k_to_py(py, k?)
     }
 }
 
