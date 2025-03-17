@@ -128,11 +128,11 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download sdist
-        uses: actions/download-artifact@v4
-        with:
-          name: sdist-kola
-          path: dist
+      # - name: Download sdist
+      #   uses: actions/download-artifact@v4
+      #   with:
+      #     name: sdist-kola
+      #     path: dist
 
       - name: Download wheels
         uses: actions/download-artifact@v4
