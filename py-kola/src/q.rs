@@ -59,17 +59,17 @@ impl QConnector {
 
 fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
     match k {
-        K::Bool(k) => Ok(k.into_py_any(py).unwrap()),
-        K::Guid(k) => Ok(k.to_string().into_py_any(py).unwrap()),
-        K::Byte(k) => Ok(k.into_py_any(py).unwrap()),
-        K::Short(k) => Ok(k.into_py_any(py).unwrap()),
-        K::Int(k) => Ok(k.into_py_any(py).unwrap()),
-        K::Long(k) => Ok(k.into_py_any(py).unwrap()),
-        K::Real(k) => Ok(k.into_py_any(py).unwrap()),
-        K::Float(k) => Ok(k.into_py_any(py).unwrap()),
-        K::Char(k) => Ok((k as char).into_py_any(py).unwrap()),
-        K::Symbol(k) => Ok(k.into_py_any(py).unwrap()),
-        K::String(k) => Ok(k.into_py_any(py).unwrap()),
+        K::Bool(k) => k.into_py_any(py),
+        K::Guid(k) => k.to_string().into_py_any(py),
+        K::Byte(k) => k.into_py_any(py),
+        K::Short(k) => k.into_py_any(py),
+        K::Int(k) => k.into_py_any(py),
+        K::Long(k) => k.into_py_any(py),
+        K::Real(k) => k.into_py_any(py),
+        K::Float(k) => k.into_py_any(py),
+        K::Char(k) => (k as char).into_py_any(py),
+        K::Symbol(k) => k.into_py_any(py),
+        K::String(k) => k.into_py_any(py),
         K::DateTime(k) => {
             if let Some(ns) = k.timestamp_nanos_opt() {
                 let datetime = PyDateTime::from_timestamp(
@@ -77,7 +77,7 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
                     ns as f64 / 1000000000.0,
                     Some(&timezone_utc(py)),
                 )?;
-                Ok(datetime.into_py_any(py).unwrap())
+                datetime.into_py_any(py)
             } else {
                 Err(PythonError("failed to get nanoseconds".to_string()).into())
             }
@@ -87,7 +87,7 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
             days = min(days, 2932532);
             days = max(days, -719162);
             let date = PyDate::from_timestamp(py, 86400 * days)?;
-            Ok(date.into_py_any(py).unwrap())
+            date.into_py_any(py)
         }
         K::Time(k) => {
             let time = PyTime::new(
@@ -98,7 +98,7 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
                 k.nanosecond() / 1000,
                 None,
             )?;
-            Ok(time.into_py_any(py).unwrap())
+            time.into_py_any(py)
         }
         K::Duration(k) => {
             let delta = PyDelta::new(
@@ -108,22 +108,18 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
                 (k.num_microseconds().unwrap_or(0) % 1000000) as i32,
                 false,
             )?;
-            Ok(delta.into_py_any(py).unwrap())
+            delta.into_py_any(py)
         }
         K::MixedList(l) => {
             let py_objects = l
                 .into_iter()
                 .map(|k| cast_k_to_py(py, k))
                 .collect::<PyResult<Vec<PyObject>>>()?;
-            Ok(PyTuple::new(py, py_objects).unwrap().into_any().unbind())
+            PyTuple::new(py, py_objects).unwrap().into_py_any(py)
         }
-        K::Series(k) => Ok(PySeries(k).into_py_any(py).unwrap()),
-        K::DataFrame(k) => Ok(PyDataFrame(k)
-            .into_pyobject(py)
-            .unwrap()
-            .into_any()
-            .unbind()),
-        K::None(_) => Ok(().into_py_any(py).unwrap()),
+        K::Series(k) => PySeries(k).into_py_any(py),
+        K::DataFrame(k) => PyDataFrame(k).into_py_any(py),
+        K::None(_) => ().into_py_any(py),
         K::Dict(dict) => {
             let py_dict = PyDict::new(py);
             for (k, v) in dict.into_iter() {
