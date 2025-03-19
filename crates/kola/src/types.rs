@@ -78,7 +78,7 @@ impl K {
                 let mut length: usize = 15;
                 for column in df.get_columns().into_iter() {
                     length += column.name().len() + 1;
-                    length += get_series_len(column)?
+                    length += get_series_len(column.as_materialized_series())?
                 }
                 Ok(length)
             }

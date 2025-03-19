@@ -6,10 +6,10 @@ use indexmap::IndexMap;
 use kola::q::Q;
 use kola::types::{MsgType, K};
 use pyo3::types::{
-    timezone_utc_bound, PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt,
-    PyList, PyString, PyTime, PyTuple,
+    timezone_utc, PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList,
+    PyString, PyTime, PyTuple,
 };
-use pyo3::{intern, prelude::*};
+use pyo3::{intern, prelude::*, IntoPyObjectExt};
 use pyo3_polars::{PyDataFrame, PySeries};
 
 #[pyclass]
@@ -59,25 +59,25 @@ impl QConnector {
 
 fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
     match k {
-        K::Bool(k) => Ok(k.to_object(py)),
-        K::Guid(k) => Ok(k.to_string().to_object(py)),
-        K::Byte(k) => Ok(k.to_object(py)),
-        K::Short(k) => Ok(k.to_object(py)),
-        K::Int(k) => Ok(k.to_object(py)),
-        K::Long(k) => Ok(k.to_object(py)),
-        K::Real(k) => Ok(k.to_object(py)),
-        K::Float(k) => Ok(k.to_object(py)),
-        K::Char(k) => Ok((k as char).to_object(py)),
-        K::Symbol(k) => Ok(k.to_object(py)),
-        K::String(k) => Ok(k.to_object(py)),
+        K::Bool(k) => Ok(k.into_py_any(py).unwrap()),
+        K::Guid(k) => Ok(k.to_string().into_py_any(py).unwrap()),
+        K::Byte(k) => Ok(k.into_py_any(py).unwrap()),
+        K::Short(k) => Ok(k.into_py_any(py).unwrap()),
+        K::Int(k) => Ok(k.into_py_any(py).unwrap()),
+        K::Long(k) => Ok(k.into_py_any(py).unwrap()),
+        K::Real(k) => Ok(k.into_py_any(py).unwrap()),
+        K::Float(k) => Ok(k.into_py_any(py).unwrap()),
+        K::Char(k) => Ok((k as char).into_py_any(py).unwrap()),
+        K::Symbol(k) => Ok(k.into_py_any(py).unwrap()),
+        K::String(k) => Ok(k.into_py_any(py).unwrap()),
         K::DateTime(k) => {
             if let Some(ns) = k.timestamp_nanos_opt() {
-                let datetime = PyDateTime::from_timestamp_bound(
+                let datetime = PyDateTime::from_timestamp(
                     py,
                     ns as f64 / 1000000000.0,
-                    Some(&timezone_utc_bound(py)),
+                    Some(&timezone_utc(py)),
                 )?;
-                Ok(datetime.to_object(py))
+                Ok(datetime.into_py_any(py).unwrap())
             } else {
                 Err(PythonError("failed to get nanoseconds".to_string()).into())
             }
@@ -86,11 +86,11 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
             let mut days = k.num_days_from_ce() as i64 - 719163;
             days = min(days, 2932532);
             days = max(days, -719162);
-            let date = PyDate::from_timestamp_bound(py, 86400 * days)?;
-            Ok(date.to_object(py))
+            let date = PyDate::from_timestamp(py, 86400 * days)?;
+            Ok(date.into_py_any(py).unwrap())
         }
         K::Time(k) => {
-            let time = PyTime::new_bound(
+            let time = PyTime::new(
                 py,
                 k.hour() as u8,
                 k.minute() as u8,
@@ -98,30 +98,34 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
                 k.nanosecond() / 1000,
                 None,
             )?;
-            Ok(time.to_object(py))
+            Ok(time.into_py_any(py).unwrap())
         }
         K::Duration(k) => {
-            let delta = PyDelta::new_bound(
+            let delta = PyDelta::new(
                 py,
                 0,
                 k.num_seconds() as i32,
                 (k.num_microseconds().unwrap_or(0) % 1000000) as i32,
                 false,
             )?;
-            Ok(delta.to_object(py))
+            Ok(delta.into_py_any(py).unwrap())
         }
         K::MixedList(l) => {
             let py_objects = l
                 .into_iter()
                 .map(|k| cast_k_to_py(py, k))
                 .collect::<PyResult<Vec<PyObject>>>()?;
-            Ok(PyTuple::new_bound(py, py_objects).into())
+            Ok(PyTuple::new(py, py_objects).unwrap().into_any().unbind())
         }
-        K::Series(k) => Ok(PySeries(k).into_py(py)),
-        K::DataFrame(k) => Ok(PyDataFrame(k).into_py(py)),
-        K::None(_) => Ok(().to_object(py)),
+        K::Series(k) => Ok(PySeries(k).into_py_any(py).unwrap()),
+        K::DataFrame(k) => Ok(PyDataFrame(k)
+            .into_pyobject(py)
+            .unwrap()
+            .into_any()
+            .unbind()),
+        K::None(_) => Ok(().into_py_any(py).unwrap()),
         K::Dict(dict) => {
-            let py_dict = PyDict::new_bound(py);
+            let py_dict = PyDict::new(py);
             for (k, v) in dict.into_iter() {
                 py_dict.set_item(k, cast_k_to_py(py, v)?)?;
             }
@@ -271,7 +275,7 @@ pub fn generate_ipc_msg<'a>(
         MsgType::Response
     };
     match kola::io::generate_ipc_msg(msg_type, enable_compression, cast_to_k(any)?) {
-        Ok(bytes) => Ok(PyBytes::new_bound(py, &bytes)),
+        Ok(bytes) => Ok(PyBytes::new(py, &bytes)),
         Err(e) => Err(PyKolaError::from(e).into()),
     }
 }

@@ -24,7 +24,7 @@ pub struct Q {
     pub enable_tls: bool,
     pub is_local: bool,
     pub timeout: Duration,
-    stream: Option<Box<dyn QStream + Send>>,
+    stream: Option<Box<dyn QStream + Send + Sync>>,
 }
 
 impl Q {

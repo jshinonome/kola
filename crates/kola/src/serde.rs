@@ -301,11 +301,12 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                 .zip(k_types.clone())
                 .map(|(v, t)| deserialize_series(v, t, true).unwrap().try_into().unwrap())
                 .collect();
-
             columns.iter_mut().zip(symbols).for_each(|(c, n)| {
-                c.rename(n.unwrap_or(""));
+                c.rename(n.unwrap_or("").into());
             });
-            Ok(K::DataFrame(DataFrame::new(columns).unwrap()))
+            Ok(K::DataFrame(
+                DataFrame::new(columns.into_iter().map(|c| c.into()).collect()).unwrap(),
+            ))
         }
         101 => {
             *pos += 1;
@@ -332,44 +333,44 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
 
 fn create_field(k_type: u8, name: &str) -> Result<Field, KolaError> {
     match k_type {
-        1 => Ok(Field::new(name, ArrowDataType::Boolean, false)),
-        2 => Ok(Field::new(name, ArrowDataType::Binary, false)),
-        4 => Ok(Field::new(name, ArrowDataType::UInt8, false)),
-        5 => Ok(Field::new(name, ArrowDataType::Int16, true)),
-        6 => Ok(Field::new(name, ArrowDataType::Int32, true)),
-        7 => Ok(Field::new(name, ArrowDataType::Int64, true)),
-        8 => Ok(Field::new(name, ArrowDataType::Float32, false)),
-        9 => Ok(Field::new(name, ArrowDataType::Float64, false)),
-        10 => Ok(Field::new(name, ArrowDataType::LargeUtf8, false)),
-        11 => Ok(Field::new(name, ArrowDataType::LargeUtf8, false)),
+        1 => Ok(Field::new(name.into(), ArrowDataType::Boolean, false)),
+        2 => Ok(Field::new(name.into(), ArrowDataType::Binary, false)),
+        4 => Ok(Field::new(name.into(), ArrowDataType::UInt8, false)),
+        5 => Ok(Field::new(name.into(), ArrowDataType::Int16, true)),
+        6 => Ok(Field::new(name.into(), ArrowDataType::Int32, true)),
+        7 => Ok(Field::new(name.into(), ArrowDataType::Int64, true)),
+        8 => Ok(Field::new(name.into(), ArrowDataType::Float32, false)),
+        9 => Ok(Field::new(name.into(), ArrowDataType::Float64, false)),
+        10 => Ok(Field::new(name.into(), ArrowDataType::LargeUtf8, false)),
+        11 => Ok(Field::new(name.into(), ArrowDataType::LargeUtf8, false)),
         12 => Ok(Field::new(
-            name,
+            name.into(),
             ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
             true,
         )),
-        14 => Ok(Field::new(name, ArrowDataType::Date32, true)),
+        14 => Ok(Field::new(name.into(), ArrowDataType::Date32, true)),
         15 => Ok(Field::new(
-            name,
+            name.into(),
             ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
             true,
         )),
         16 => Ok(Field::new(
-            name,
+            name.into(),
             ArrowDataType::Time64(TimeUnit::Nanosecond),
             true,
         )),
         17 => Ok(Field::new(
-            name,
+            name.into(),
             ArrowDataType::Time32(TimeUnit::Millisecond),
             true,
         )),
         18 => Ok(Field::new(
-            name,
+            name.into(),
             ArrowDataType::Time32(TimeUnit::Millisecond),
             true,
         )),
         19 => Ok(Field::new(
-            name,
+            name.into(),
             ArrowDataType::Time32(TimeUnit::Millisecond),
             true,
         )),
@@ -472,7 +473,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             array_box =
                 BooleanArray::from_slice(array_vec.iter().map(|u| *u == 1).collect::<Vec<_>>())
                     .boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             Ok(K::Series(series))
         }
         2 => {
@@ -482,12 +483,12 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 None,
             )
             .boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             Ok(K::Series(series))
         }
         4 => {
             array_box = UInt8Array::from_vec(array_vec.to_vec()).boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             Ok(K::Series(series))
         }
         5 => {
@@ -497,7 +498,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             let bitmap = Bitmap::from_iter(slice.into_iter().map(|s| *s != i16::MIN));
             let mut array = Int16Array::from_slice(slice);
             array.set_validity(Some(bitmap));
-            series = Series::from_arrow(name, array.boxed()).unwrap();
+            series = Series::from_arrow(name.into(), array.boxed()).unwrap();
             Ok(K::Series(series))
         }
         6 => {
@@ -511,7 +512,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             );
             let mut array = Int32Array::from_slice(slice);
             array.set_validity(Some(bitmap));
-            series = Series::from_arrow(name, array.boxed()).unwrap();
+            series = Series::from_arrow(name.into(), array.boxed()).unwrap();
             Ok(K::Series(series))
         }
         7 => {
@@ -525,7 +526,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             );
             let mut array = Int64Array::from_slice(slice);
             array.set_validity(Some(bitmap));
-            series = Series::from_arrow(name, array.boxed()).unwrap();
+            series = Series::from_arrow(name.into(), array.boxed()).unwrap();
             Ok(K::Series(series))
         }
         8 => {
@@ -535,7 +536,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             let bitmap = Bitmap::from_iter(slice.into_iter().map(|s| !f32::is_nan(*s)));
             let mut array = Float32Array::from_slice(slice);
             array.set_validity(Some(bitmap));
-            series = Series::from_arrow(name, array.boxed()).unwrap();
+            series = Series::from_arrow(name.into(), array.boxed()).unwrap();
             Ok(K::Series(series))
         }
         9 => {
@@ -545,7 +546,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             let bitmap = Bitmap::from_iter(slice.into_iter().map(|s| !f64::is_nan(*s)));
             let mut array = Float64Array::from_slice(slice);
             array.set_validity(Some(bitmap));
-            series = Series::from_arrow(name, array.boxed()).unwrap();
+            series = Series::from_arrow(name.into(), array.boxed()).unwrap();
             Ok(K::Series(series))
         }
         10 => {
@@ -558,7 +559,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                     None,
                 )
                 .boxed();
-                series = Series::from_arrow(name, array_box).unwrap();
+                series = Series::from_arrow(name.into(), array_box).unwrap();
                 Ok(K::Series(series))
             } else {
                 Ok(K::String(String::from_utf8_lossy(array_vec).to_string()))
@@ -585,7 +586,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 None,
             )
             .boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             if as_column {
                 series = series
                     .cast(&PolarsDataType::Categorical(
@@ -614,7 +615,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 Some(bitmap),
             );
             array_box = array.boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             Ok(K::Series(series))
         }
         14 => {
@@ -631,7 +632,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 .collect::<Vec<_>>();
             let array = PrimitiveArray::new(ArrowDataType::Date32, slice.into(), Some(bitmap));
             array_box = array.boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             Ok(K::Series(series))
         }
         15 => {
@@ -659,7 +660,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 Some(bitmap),
             );
             array_box = array.boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             Ok(K::Series(series))
         }
         // timespan
@@ -674,7 +675,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 Some(bitmap),
             );
             array_box = array.boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             Ok(K::Series(series))
         }
         // minutes, seconds, time
@@ -705,7 +706,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 Some(bitmap),
             );
             array_box = array.boxed();
-            series = Series::from_arrow(name, array_box).unwrap();
+            series = Series::from_arrow(name.into(), array_box).unwrap();
             Ok(K::Series(series))
         }
         _ => Err(KolaError::NotSupportedKListErr(k_type)),
@@ -715,26 +716,29 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
 fn new_empty_series(k_type: u8) -> Result<K, KolaError> {
     let name = K_TYPE_NAME[k_type as usize];
     let series = match k_type {
-        0 => Series::new_empty(name, &PolarsDataType::Null),
-        1 => Series::new_empty(name, &PolarsDataType::Boolean),
-        2 => Series::new_empty(name, &PolarsDataType::Binary),
-        4 | 10 => Series::new_empty(name, &PolarsDataType::String),
-        5 => Series::new_empty(name, &PolarsDataType::Int16),
-        6 => Series::new_empty(name, &PolarsDataType::Int32),
-        7 => Series::new_empty(name, &PolarsDataType::Int64),
-        8 => Series::new_empty(name, &PolarsDataType::Float32),
-        9 => Series::new_empty(name, &PolarsDataType::Float64),
+        0 => Series::new_empty(name.into(), &PolarsDataType::Null),
+        1 => Series::new_empty(name.into(), &PolarsDataType::Boolean),
+        2 => Series::new_empty(name.into(), &PolarsDataType::Binary),
+        4 | 10 => Series::new_empty(name.into(), &PolarsDataType::String),
+        5 => Series::new_empty(name.into(), &PolarsDataType::Int16),
+        6 => Series::new_empty(name.into(), &PolarsDataType::Int32),
+        7 => Series::new_empty(name.into(), &PolarsDataType::Int64),
+        8 => Series::new_empty(name.into(), &PolarsDataType::Float32),
+        9 => Series::new_empty(name.into(), &PolarsDataType::Float64),
         11 => Series::new_empty(
-            name,
+            name.into(),
             &PolarsDataType::Categorical(None, CategoricalOrdering::Lexical),
         ),
         12 | 15 => Series::new_empty(
-            name,
+            name.into(),
             &PolarsDataType::Datetime(PolarTimeUnit::Nanoseconds, None),
         ),
-        14 => Series::new_empty(name, &PolarsDataType::Date),
-        16 => Series::new_empty(name, &PolarsDataType::Duration(PolarTimeUnit::Nanoseconds)),
-        17 | 18 | 19 => Series::new_empty(name, &PolarsDataType::Time),
+        14 => Series::new_empty(name.into(), &PolarsDataType::Date),
+        16 => Series::new_empty(
+            name.into(),
+            &PolarsDataType::Duration(PolarTimeUnit::Nanoseconds),
+        ),
+        17 | 18 | 19 => Series::new_empty(name.into(), &PolarsDataType::Time),
         _ => return Err(KolaError::NotSupportedKListErr(k_type)),
     };
     Ok(K::Series(series))
@@ -796,7 +800,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
             array_box,
             None,
         );
-        let series = Series::from_arrow(name, list_array.boxed()).unwrap();
+        let series = Series::from_arrow(name.into(), list_array.boxed()).unwrap();
         let series = series
             .cast(&PolarsDataType::List(
                 PolarsDataType::Categorical(None, CategoricalOrdering::Lexical).boxed(),
@@ -892,7 +896,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
             );
 
             Ok(K::Series(
-                Series::from_arrow(name, list_array.boxed()).unwrap(),
+                Series::from_arrow(name.into(), list_array.boxed()).unwrap(),
             ))
         }
         10 => {
@@ -903,7 +907,9 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
                 None,
             )
             .boxed();
-            Ok(K::Series(Series::from_arrow(name, array_box).unwrap()))
+            Ok(K::Series(
+                Series::from_arrow(name.into(), array_box).unwrap(),
+            ))
         }
         _ => unreachable!(),
     }
@@ -1178,7 +1184,12 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             vec.write(&column_count.to_le_bytes()).unwrap();
             let vectors = columns
                 .into_par_iter()
-                .map(|s| serialize_series(s, get_series_len(s).unwrap()))
+                .map(|s| {
+                    serialize_series(
+                        s.as_materialized_series(),
+                        get_series_len(s.as_materialized_series()).unwrap(),
+                    )
+                })
                 .collect::<Result<Vec<Vec<u8>>, KolaError>>()?;
             vectors.into_iter().for_each(|v| {
                 vec.write(&v).unwrap();
@@ -1931,9 +1942,11 @@ mod tests {
         let vec = [1, 0, 2, 0, 0, 0, 1, 0].to_vec();
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
-        let expect =
-            Series::from_arrow(name, BooleanArray::from([Some(true), Some(false)]).boxed())
-                .unwrap();
+        let expect = Series::from_arrow(
+            name.into(),
+            BooleanArray::from([Some(true), Some(false)]).boxed(),
+        )
+        .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
         assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
@@ -1959,7 +1972,7 @@ mod tests {
             ),
             None,
         );
-        let expect = Series::from_arrow(name, binary_array.boxed()).unwrap();
+        let expect = Series::from_arrow(name.into(), binary_array.boxed()).unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
         assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
@@ -1971,7 +1984,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect =
-            Series::from_arrow(name, UInt8Array::from([Some(0), Some(1)]).boxed()).unwrap();
+            Series::from_arrow(name.into(), UInt8Array::from([Some(0), Some(1)]).boxed()).unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
         assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
@@ -1983,7 +1996,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             Int16Array::from([None, Some(i16::MIN + 1), Some(0), Some(i16::MAX)]).boxed(),
         )
         .unwrap();
@@ -2000,9 +2013,11 @@ mod tests {
         .to_vec();
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
-        let expect =
-            Series::from_arrow(name, Int32Array::from([None, None, Some(0), None]).boxed())
-                .unwrap();
+        let expect = Series::from_arrow(
+            name.into(),
+            Int32Array::from([None, None, Some(0), None]).boxed(),
+        )
+        .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
         let vec = [
@@ -2021,9 +2036,11 @@ mod tests {
         .to_vec();
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
-        let expect =
-            Series::from_arrow(name, Int64Array::from([None, None, Some(0), None]).boxed())
-                .unwrap();
+        let expect = Series::from_arrow(
+            name.into(),
+            Int64Array::from([None, None, Some(0), None]).boxed(),
+        )
+        .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
         let vec = [
@@ -2043,7 +2060,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             Float32Array::from([
                 None,
                 Some(f32::NEG_INFINITY),
@@ -2068,7 +2085,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             Float64Array::from([
                 None,
                 Some(f64::NEG_INFINITY),
@@ -2089,7 +2106,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             Utf8Array::<i64>::from([Some("a"), Some(""), Some("abc")]).boxed(),
         )
         .unwrap();
@@ -2117,7 +2134,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[6] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             Utf8Array::<i64>::from([Some("a"), Some("ab"), Some("abc")]).boxed(),
         )
         .unwrap();
@@ -2136,7 +2153,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             PrimitiveArray::new(
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
                 vec![1699533296123456789i64, i64::MIN, 1699488000000000000].into(),
@@ -2159,7 +2176,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             PrimitiveArray::new(
                 ArrowDataType::Date32,
                 vec![19670, -96465658, 95026601].into(),
@@ -2183,7 +2200,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             PrimitiveArray::new(
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
                 vec![i64::MIN, i64::MIN + 1, 1699533296789000000i64, i64::MAX].into(),
@@ -2206,7 +2223,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             PrimitiveArray::new(
                 ArrowDataType::Duration(TimeUnit::Nanosecond),
                 vec![i64::MIN, 45296123456789, i64::MIN + 1, i64::MAX].into(),
@@ -2229,7 +2246,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             PrimitiveArray::new(
                 ArrowDataType::Time64(TimeUnit::Nanosecond),
                 vec![i64::MIN, 45240000_000000, 0i64, NANOS_PER_DAY - 1].into(),
@@ -2251,7 +2268,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             PrimitiveArray::new(
                 ArrowDataType::Time64(TimeUnit::Nanosecond),
                 vec![i64::MIN, 45296000_000000, 0i64, NANOS_PER_DAY - 1].into(),
@@ -2273,7 +2290,7 @@ mod tests {
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             PrimitiveArray::new(
                 ArrowDataType::Time64(TimeUnit::Nanosecond),
                 vec![i64::MIN, 45296789_000000, 0i64, 86399999_000_000].into(),
@@ -2301,7 +2318,7 @@ mod tests {
         let array = BooleanArray::from([true; 6].map(|b| Some(b)));
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             ListArray::new(
                 ArrowDataType::List(Box::new(field)),
                 offsets,
@@ -2329,9 +2346,10 @@ mod tests {
         let array = BooleanArray::from([true, false, true, false, true, false].map(|b| Some(b)));
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             FixedSizeListArray::new(
                 ArrowDataType::FixedSizeList(Box::new(field), 2),
+                array.len(),
                 array.boxed(),
                 None,
             )
@@ -2356,7 +2374,7 @@ mod tests {
         let array = UInt8Array::from_slice(vec![1, 1, 2]);
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             ListArray::new(
                 ArrowDataType::List(Box::new(field)),
                 offsets,
@@ -2385,7 +2403,7 @@ mod tests {
         let array = Int16Array::from([None, Some(1), Some(2)]);
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             ListArray::new(
                 ArrowDataType::List(Box::new(field)),
                 offsets,
@@ -2414,7 +2432,7 @@ mod tests {
         let array = Int32Array::from([None, Some(1), Some(2)]);
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             ListArray::new(
                 ArrowDataType::List(Box::new(field)),
                 offsets,
@@ -2443,7 +2461,7 @@ mod tests {
         let array = Int64Array::from([None, Some(1), Some(2)]);
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             ListArray::new(
                 ArrowDataType::List(Box::new(field)),
                 offsets,
@@ -2473,7 +2491,7 @@ mod tests {
             Float32Array::from([Some(f32::INFINITY), Some(1.0f32), Some(f32::NEG_INFINITY)]);
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             ListArray::new(
                 ArrowDataType::List(Box::new(field)),
                 offsets,
@@ -2502,7 +2520,7 @@ mod tests {
         let array = Float64Array::from([Some(f64::INFINITY), Some(1.0), Some(f64::NEG_INFINITY)]);
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             ListArray::new(
                 ArrowDataType::List(Box::new(field)),
                 offsets,
@@ -2531,7 +2549,7 @@ mod tests {
         let array = Int64Array::from([None, Some(1), Some(2)]);
         let field = create_field(k_type, name).unwrap();
         let expect = Series::from_arrow(
-            name,
+            name.into(),
             ListArray::new(
                 ArrowDataType::List(Box::new(field)),
                 offsets,
@@ -2557,7 +2575,9 @@ mod tests {
         let expect = K::MixedList(vec![
             K::Symbol("upd".to_owned()),
             K::Symbol("t".to_owned()),
-            K::DataFrame(DataFrame::new(vec![Series::new("a", [1i64].as_ref())]).unwrap()),
+            K::DataFrame(
+                DataFrame::new(vec![Series::new("a".into(), [1i64].as_ref()).into()]).unwrap(),
+            ),
         ]);
         assert_eq!(k, expect);
         assert_eq!(vec, serialize(&expect).unwrap());
@@ -2572,9 +2592,9 @@ mod tests {
         .to_vec();
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let df: DataFrame = k.try_into().unwrap();
-        let s0 = Series::new("a", [1i64].as_ref());
-        let s1 = Series::new("b", [1.0f64].as_ref());
-        let expect = DataFrame::new(vec![s0, s1]).unwrap();
+        let s0 = Series::new("a".into(), [1i64].as_ref());
+        let s1 = Series::new("b".into(), [1.0f64].as_ref());
+        let expect = DataFrame::new(vec![s0.into(), s1.into()]).unwrap();
         assert_eq!(df, expect);
         assert_eq!(vec, serialize(&K::DataFrame(expect)).unwrap());
     }
@@ -2589,9 +2609,9 @@ mod tests {
         .to_vec();
         let k = deserialize(&vec, &mut 0, false).unwrap();
         let df: DataFrame = k.try_into().unwrap();
-        let s0 = Series::new("a", [1i64].as_ref());
-        let s1 = Series::new("b", [1.0f64].as_ref());
-        let expect = DataFrame::new(vec![s0, s1]).unwrap();
+        let s0 = Series::new("a".into(), [1i64].as_ref());
+        let s1 = Series::new("b".into(), [1.0f64].as_ref());
+        let expect = DataFrame::new(vec![s0.into(), s1.into()]).unwrap();
         assert_eq!(df, expect);
     }
 

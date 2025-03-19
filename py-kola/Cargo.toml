@@ -9,15 +9,15 @@ crate-type = ["cdylib"]
 
 [dependencies]
 kola = { path = "../crates/kola" }
-pyo3 = { version = "0.22.2", features = ["extension-module", "chrono"] }
-thiserror = "1.0.63"
-pyo3-polars = { version = "0.16.1", features = [
+pyo3 = { version = "0.23.5", features = ["extension-module", "chrono"] }
+thiserror = "2.0.12"
+pyo3-polars = { version = "0.20.0", features = [
   "dtype-categorical",
   "dtype-array",
   "dtype-full",
 ] }
 chrono = "0.4.38"
-indexmap = "2.4.0"
+indexmap = "2.8.0"
 
 [dependencies.polars]
 workspace = true

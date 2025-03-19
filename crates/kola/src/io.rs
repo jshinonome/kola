@@ -125,15 +125,15 @@ mod tests {
         let k = deserialize(&unzipped, &mut 2, false).unwrap();
         let df: DataFrame = k.try_into().unwrap();
         let sym = Series::from_arrow(
-            "sym",
+            "sym".into(),
             Utf8Array::<i64>::from([Some("a"), Some("b")]).boxed(),
         )
         .unwrap()
         .cast(&DataType::Categorical(None, CategoricalOrdering::Lexical))
         .unwrap();
-        let qty = Series::new("qty", [1i64, 1].as_ref());
-        let price = Series::new("price", [1.0f64, 1.0].as_ref());
-        let expect = DataFrame::new(vec![sym, qty, price]).unwrap();
+        let qty = Series::new("qty".into(), [1i64, 1].as_ref());
+        let price = Series::new("price".into(), [1.0f64, 1.0].as_ref());
+        let expect = DataFrame::new(vec![sym.into(), qty.into(), price.into()]).unwrap();
         assert_eq!(df, expect);
     }
 }
