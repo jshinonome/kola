@@ -51,8 +51,14 @@ impl QConnector {
         cast_k_to_py(py, k)
     }
 
-    fn execute_async(&mut self, expr: &str, args: Bound<PyTuple>) -> Result<(), PyKolaError> {
-        self.q.execute_async(expr, &cast_to_k_vec(args)?)?;
+    fn execute_async(
+        &mut self,
+        py: Python,
+        expr: &str,
+        args: Bound<PyTuple>,
+    ) -> Result<(), PyKolaError> {
+        let args = cast_to_k_vec(args)?;
+        let _ = py.allow_threads(move || self.q.execute_async(expr, &args));
         Ok(())
     }
 }
@@ -146,18 +152,18 @@ impl QConnector {
         ))
     }
 
-    pub fn connect(&mut self) -> Result<(), PyKolaError> {
-        match self.q.connect() {
+    pub fn connect(&mut self, py: Python) -> Result<(), PyKolaError> {
+        py.allow_threads(|| match self.q.connect() {
             Ok(_) => Ok(()),
             Err(e) => Err(PyKolaError::from(e)),
-        }
+        })
     }
 
-    pub fn shutdown(&mut self) -> Result<(), PyKolaError> {
-        match self.q.shutdown() {
+    pub fn shutdown(&mut self, py: Python) -> Result<(), PyKolaError> {
+        py.allow_threads(|| match self.q.shutdown() {
             Ok(_) => Ok(()),
             Err(e) => Err(PyKolaError::from(e)),
-        }
+        })
     }
 
     #[pyo3(signature = (expr, *args))]
@@ -166,8 +172,13 @@ impl QConnector {
     }
 
     #[pyo3(signature = (expr, *args))]
-    pub fn asyn(&mut self, expr: &str, args: Bound<PyTuple>) -> Result<(), PyKolaError> {
-        self.execute_async(expr, args)
+    pub fn asyn(
+        &mut self,
+        py: Python,
+        expr: &str,
+        args: Bound<PyTuple>,
+    ) -> Result<(), PyKolaError> {
+        self.execute_async(py, expr, args)
     }
 
     pub fn receive(&mut self, py: Python) -> PyResult<PyObject> {
