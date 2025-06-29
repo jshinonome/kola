@@ -6,8 +6,8 @@ use indexmap::IndexMap;
 use kola::q::Q;
 use kola::types::{MsgType, K};
 use pyo3::types::{
-    timezone_utc, PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList,
-    PyString, PyTime, PyTuple,
+    PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList, PyString, PyTime,
+    PyTuple, PyTzInfo,
 };
 use pyo3::{intern, prelude::*, IntoPyObjectExt};
 use pyo3_polars::{PyDataFrame, PySeries};
@@ -81,7 +81,7 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
                 let datetime = PyDateTime::from_timestamp(
                     py,
                     ns as f64 / 1000000000.0,
-                    Some(&timezone_utc(py)),
+                    Some(&PyTzInfo::utc(py).unwrap()),
                 )?;
                 datetime.into_py_any(py)
             } else {

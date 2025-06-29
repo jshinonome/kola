@@ -1,6 +1,6 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Timelike, Utc};
 use indexmap::IndexMap;
-use polars::chunked_array::ops::{ChunkFillNullValue, FillNullStrategy};
+use polars::chunked_array::ops::ChunkFillNullValue;
 use polars::datatypes::{
     CategoricalOrdering, DataType as PolarsDataType, TimeUnit as PolarTimeUnit,
 };
@@ -1277,15 +1277,13 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             k_size = 2;
             vec.write(&[5, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
-            let new_series: Series;
-            let ptr = if series.null_count() > 0 {
-                new_series = series.fill_null(FillNullStrategy::MinBound).unwrap();
-                new_series.to_physical_repr()
+            let chunks = series.i16().unwrap();
+            let chunks = if chunks.null_count() > 0 {
+                chunks.fill_null_with_values(i16::MIN).unwrap()
             } else {
-                series.to_physical_repr()
+                chunks.clone()
             };
-            let chunks = &ptr.i16().unwrap().chunks();
-            chunks.into_iter().for_each(|array| {
+            chunks.chunks().into_iter().for_each(|array| {
                 let array = unsafe {
                     array
                         .as_any()
@@ -1303,15 +1301,13 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             k_size = 4;
             vec.write(&[6, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
-            let new_series: Series;
-            let ptr = if series.null_count() > 0 {
-                new_series = series.fill_null(FillNullStrategy::MinBound).unwrap();
-                new_series.to_physical_repr()
+            let chunks = series.i32().unwrap();
+            let chunks = if chunks.null_count() > 0 {
+                chunks.fill_null_with_values(i32::MIN).unwrap()
             } else {
-                series.to_physical_repr()
+                chunks.clone()
             };
-            let chunks = &ptr.i32().unwrap().chunks();
-            chunks.into_iter().for_each(|array| {
+            chunks.chunks().into_iter().for_each(|array| {
                 let array = unsafe {
                     array
                         .as_any()
@@ -1447,15 +1443,13 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             k_size = 4;
             vec.write(&[14, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
-            let new_series: Series;
-            let ptr = if series.null_count() > 0 {
-                new_series = series.fill_null(FillNullStrategy::MinBound).unwrap();
-                new_series.to_physical_repr()
+            let chunks = series.i32().unwrap();
+            let chunks = if chunks.null_count() > 0 {
+                chunks.fill_null_with_values(i32::MIN).unwrap()
             } else {
-                series.to_physical_repr()
+                chunks.clone()
             };
-            let chunks = &ptr.i32().unwrap().chunks();
-            chunks.into_iter().for_each(|array| {
+            chunks.chunks().into_iter().for_each(|array| {
                 let buffer = unsafe {
                     array
                         .as_any()
