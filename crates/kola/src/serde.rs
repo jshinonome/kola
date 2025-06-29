@@ -222,10 +222,12 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                     }
                 }
             };
+            let start_pos = *pos;
+            *pos = end_pos;
             if k_type == 10 {
-                deserialize_series(&vec[*pos..end_pos], k_type, false)
+                deserialize_series(&vec[start_pos..end_pos], k_type, false)
             } else {
-                deserialize_series(&vec[*pos..end_pos], k_type, true)
+                deserialize_series(&vec[start_pos..end_pos], k_type, true)
             }
         }
         99 => {
