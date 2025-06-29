@@ -1443,7 +1443,8 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             k_size = 4;
             vec.write(&[14, 0]).unwrap();
             vec.write(&(k_length as i32).to_le_bytes()).unwrap();
-            let chunks = series.i32().unwrap();
+            let chunks = series.cast(&PolarsDataType::Int32).unwrap();
+            let chunks = chunks.i32().unwrap();
             let chunks = if chunks.null_count() > 0 {
                 chunks.fill_null_with_values(i32::MIN).unwrap()
             } else {
@@ -2345,7 +2346,7 @@ mod tests {
             name.into(),
             FixedSizeListArray::new(
                 ArrowDataType::FixedSizeList(Box::new(field), 2),
-                array.len(),
+                array.len() / 2,
                 array.boxed(),
                 None,
             )
