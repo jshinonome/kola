@@ -11,7 +11,7 @@ def read_binary(filepath: str) -> pl.DataFrame:
     return read_binary_table(filepath)
 
 
-def generate_ipc(
+def serialize_as_ipc_bytes(
     msg_type: Literal["async", "sync", "response"],
     enable_compression: bool,
     any: object,
@@ -29,4 +29,4 @@ def deserialize_bytes(buf: bytes) -> object:
     return deserialize(buf)
 
 
-__all__ = [read_binary, generate_ipc, deserialize_bytes]
+__all__ = [read_binary, serialize_as_ipc_bytes, deserialize_bytes]
