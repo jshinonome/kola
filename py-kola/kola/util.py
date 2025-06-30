@@ -4,7 +4,7 @@ from typing import Literal
 import polars as pl
 
 with contextlib.suppress(ImportError):  # Module not available when building docs
-    from kola.kola import generate_ipc_msg, read_binary_table
+    from kola.kola import generate_ipc_msg, read_binary_table, deserialize
 
 
 def read_binary(filepath: str) -> pl.DataFrame:
@@ -25,4 +25,8 @@ def generate_ipc(
     )
 
 
-__all__ = [read_binary]
+def deserialize_bytes(buf: bytes) -> object:
+    return deserialize(buf)
+
+
+__all__ = [read_binary, generate_ipc, deserialize_bytes]

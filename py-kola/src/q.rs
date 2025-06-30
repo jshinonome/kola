@@ -286,3 +286,9 @@ pub fn generate_ipc_msg<'a>(
         Err(e) => Err(PyKolaError::from(e).into()),
     }
 }
+
+#[pyfunction]
+pub fn deserialize<'a>(py: Python<'a>, buf: &[u8]) -> PyResult<PyObject> {
+    let k = kola::io::deserialize(buf).map_err(|e| PyKolaError::from(e))?;
+    cast_k_to_py(py, k)
+}

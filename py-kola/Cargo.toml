@@ -18,6 +18,7 @@ pyo3-polars = { version = "0.16.1", features = [
 ] }
 chrono = "0.4.38"
 indexmap = "2.4.0"
+hashbrown = { version = "0.14.5", features = ["raw"] }
 
 [dependencies.polars]
 workspace = true

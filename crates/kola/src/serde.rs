@@ -1565,12 +1565,12 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         }
                     }
                 }
-                PolarsDataType::UInt8 => todo!(),
-                PolarsDataType::Int16 => todo!(),
-                PolarsDataType::Int32 => todo!(),
-                PolarsDataType::Int64 => todo!(),
-                PolarsDataType::Float32 => todo!(),
-                PolarsDataType::Float64 => todo!(),
+                // PolarsDataType::UInt8 => todo!(),
+                // PolarsDataType::Int16 => todo!(),
+                // PolarsDataType::Int32 => todo!(),
+                // PolarsDataType::Int64 => todo!(),
+                // PolarsDataType::Float32 => todo!(),
+                // PolarsDataType::Float64 => todo!(),
                 _ => {
                     return Err(KolaError::NotSupportedPolarsNestedListTypeErr(
                         data_type.as_ref().clone(),
