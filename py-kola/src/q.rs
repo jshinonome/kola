@@ -30,6 +30,7 @@ impl QConnector {
         password: &str,
         enable_tls: bool,
         timeout: u64,
+        version: u8,
     ) -> Self {
         QConnector {
             host: host.to_string(),
@@ -37,7 +38,7 @@ impl QConnector {
             user: user.to_string(),
             password: password.to_string(),
             enable_tls,
-            q: Q::new(host, port, user, password, enable_tls, timeout),
+            q: Q::new(host, port, user, password, enable_tls, timeout, version),
         }
     }
 
@@ -146,9 +147,10 @@ impl QConnector {
         password: &str,
         enable_tls: bool,
         timeout: u64,
+        version: u8,
     ) -> PyResult<Self> {
         Ok(QConnector::new(
-            host, port, user, password, enable_tls, timeout,
+            host, port, user, password, enable_tls, timeout, version,
         ))
     }
 

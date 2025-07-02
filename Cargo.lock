@@ -92,6 +92,9 @@ name = "bitflags"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b048fb63fd8b5923fc5aa7b340d8e156aec7ec02f0c78fa8a6ddc2613f6f71de"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bumpalo"
@@ -498,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "kola"
-version = "1.6.4"
+version = "1.7.0"
 dependencies = [
  "chrono",
  "hashbrown",
@@ -985,6 +988,7 @@ dependencies = [
  "rand_distr",
  "rayon",
  "regex",
+ "serde",
  "smartstring",
  "thiserror",
  "version_check",
@@ -1338,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "py-kola"
-version = "1.6.4"
+version = "1.7.0"
 dependencies = [
  "chrono",
  "hashbrown",
@@ -1728,6 +1732,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fb72c633efbaa2dd666986505016c32c3044395ceaf881518399d2f4127ee29"
 dependencies = [
  "autocfg",
+ "serde",
  "static_assertions",
  "version_check",
 ]
