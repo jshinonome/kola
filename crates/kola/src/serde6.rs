@@ -196,8 +196,13 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                 }
                 *pos += 4;
                 Ok(K::Time(
-                    NaiveTime::from_num_seconds_from_midnight_opt(seconds, nanos)
-                        .unwrap_or(NaiveTime::from_hms_opt(23, 59, 59).unwrap()),
+                    NaiveTime::from_num_seconds_from_midnight_opt(seconds, nanos).unwrap_or(
+                        NaiveTime::from_num_seconds_from_midnight_opt(
+                            23 * 3600 + 59 * 60 + 59,
+                            999_999_999,
+                        )
+                        .unwrap(),
+                    ),
                 ))
             }
             _ => Err(KolaError::NotSupportedKTypeErr(k_type)),
@@ -1894,7 +1899,7 @@ mod tests {
         offset::OffsetsBuffer,
     };
 
-    use crate::serde::*;
+    use crate::serde6::*;
 
     #[test]
     fn decompress_msg() {

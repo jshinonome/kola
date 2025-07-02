@@ -128,6 +128,46 @@ impl K {
             _ => K::None(0),
         }
     }
+
+    pub fn get_j_type_code(&self) -> i16 {
+        match self {
+            K::Series(s) => match s.dtype() {
+                PolarsDataType::Boolean => 1,
+                PolarsDataType::UInt8 => 2,
+                PolarsDataType::Int16 => 3,
+                PolarsDataType::Int32 => 4,
+                PolarsDataType::Int64 => 5,
+                PolarsDataType::Date => 6,
+                PolarsDataType::Time => 7,
+                PolarsDataType::Datetime(TimeUnit::Milliseconds, _) => 8,
+                PolarsDataType::Datetime(TimeUnit::Nanoseconds, _) => 9,
+                PolarsDataType::Duration(_) => 10,
+                PolarsDataType::Float32 => 11,
+                PolarsDataType::Float64 => 12,
+                PolarsDataType::String => 13,
+                PolarsDataType::Categorical(_, _) => 14,
+                _ => 15,
+            },
+            K::Bool(_) => -1,
+            K::Byte(_) => -2,
+            K::Short(_) => -3,
+            K::Int(_) => -4,
+            K::Long(_) => -5,
+            K::Date(_) => -6,
+            K::Time(_) => -7,
+            K::DateTime(_) => -9,
+            K::Duration(_) => -10,
+            K::Real(_) => -11,
+            K::Float(_) => -12,
+            K::String(_) => -13,
+            K::Symbol(_) => -14,
+            K::MixedList(_) => 90,
+            K::Dict(_) => 91,
+            K::DataFrame(_) => 92,
+            K::None(_) => 0,
+            _ => 100,
+        }
+    }
 }
 
 impl TryFrom<K> for Series {

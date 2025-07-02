@@ -28,6 +28,8 @@ features = [
   "dtype-datetime",
   "dtype-date",
   "dtype-time",
+  "ipc",
+  "serde",
 ]
 
 [dependencies.xxhash-rust]

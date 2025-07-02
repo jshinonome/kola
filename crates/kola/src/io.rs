@@ -8,7 +8,7 @@ use polars::frame::DataFrame;
 use xxhash_rust::xxh32;
 
 use crate::errors::KolaError;
-use crate::serde::{compress, deserialize, serialize};
+use crate::serde6;
 use crate::types::{MsgType, K};
 
 pub fn read_binary_table(path: &str) -> Result<DataFrame, KolaError> {
@@ -21,7 +21,7 @@ pub fn read_binary_table(path: &str) -> Result<DataFrame, KolaError> {
     if buffer[0..8] == vec![107u8, 120, 122, 105, 112, 112, 101, 100] {
         buffer = unzip(&buffer)?;
     }
-    match deserialize(&buffer, &mut 2, false)? {
+    match serde6::deserialize(&buffer, &mut 2, false)? {
         K::DataFrame(k) => Ok(k),
         _ => Err(KolaError::Err("Not a table".to_owned())),
     }
@@ -83,12 +83,16 @@ pub fn generate_ipc_msg(
     let mut vec: Vec<u8> = Vec::with_capacity(length + 8);
     vec.write(&[1, msg_type as u8, 0, 0]).unwrap();
     vec.write(&(length as u32 + 8).to_le_bytes()).unwrap();
-    vec.write(&serialize(&k)?).unwrap();
+    vec.write(&serde6::serialize(&k)?).unwrap();
     if enable_compression {
-        Ok(compress(vec))
+        Ok(serde6::compress(vec))
     } else {
         Ok(vec)
     }
+}
+
+pub fn deserialize(buf: &[u8]) -> Result<K, KolaError> {
+    serde6::deserialize(buf, &mut 0, false)
 }
 
 #[cfg(test)]
@@ -101,7 +105,7 @@ mod tests {
     };
     use polars_arrow::array::Utf8Array;
 
-    use crate::{io, serde::deserialize};
+    use crate::{io, serde6::deserialize};
 
     #[test]
     fn unzip_lz4() {

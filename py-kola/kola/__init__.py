@@ -1,11 +1,14 @@
 import kola.type as QType
 from kola.exceptions import QKolaAuthError, QKolaError, QKolaIOError
+from kola.j import J
 from kola.q import Q
-from kola.util import generate_ipc, read_binary
+from kola.util import deserialize_bytes, read_binary, serialize_as_ipc_bytes6
 
 __all__ = [
-    generate_ipc,
+    serialize_as_ipc_bytes6,
+    deserialize_bytes,
     Q,
+    J,
     QKolaAuthError,
     QKolaError,
     QKolaIOError,

@@ -11,8 +11,8 @@ with contextlib.suppress(ImportError):  # Module not available when building doc
 logger = logging.getLogger("kola")
 
 
-# Q use IPC protocol version 6, which is compatible with kdb+
-class Q(object):
+# J use IPC protocol version 9, which is not compatible with kdb+
+class J(object):
     def __init__(
         self,
         host: str,
@@ -34,7 +34,7 @@ class Q(object):
         self.port = port
         self.user = user
         self.retries = retries
-        self.q = QConnector(host, port, user, passwd, enable_tls, timeout, 6)
+        self.q = QConnector(host, port, user, passwd, enable_tls, timeout, 9)
 
     def connect(self):
         self.q.connect()
@@ -60,7 +60,7 @@ class Q(object):
                     if n == self.retries:
                         raise (e)
 
-    def asyn(self, expr: str, *args):
+    def asyn(self, expr: str, *args) -> None:
         if self.retries <= 0:
             return self.q.asyn(expr, *args)
         else:
