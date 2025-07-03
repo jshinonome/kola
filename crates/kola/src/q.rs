@@ -296,7 +296,7 @@ impl Q {
                 Ok(stream) => stream,
                 Err(e) => return Err(KolaError::IOError(e)),
             };
-
+            tcp_stream.set_nodelay(true)?;
             if !self.timeout.is_zero() {
                 tcp_stream
                     .set_read_timeout(Some(self.timeout))

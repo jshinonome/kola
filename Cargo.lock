@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "kola"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "chrono",
  "hashbrown",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "py-kola"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "chrono",
  "hashbrown",
