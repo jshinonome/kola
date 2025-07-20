@@ -1,12 +1,72 @@
 # kola
 
-a Python [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
+a Python [Polars](https://pola-rs.github.io/polars/) Interface to j\* and q
 
 ## Basic Data Type Map
 
-### Deserialization
+### j\*
 
-#### Atom
+#### Deserialization
+
+##### Atom
+
+| j type      | n   | size | python type | note                        |
+| ----------- | --- | ---- | ----------- | --------------------------- |
+| `boolean`   | 1   | 1    | `bool`      |                             |
+| `u8`        | 4   | 1    | `int`       |                             |
+| `i16`       | 5   | 2    | `int`       |                             |
+| `i32`       | 6   | 4    | `int`       |                             |
+| `i64`       | 7   | 8    | `int`       |                             |
+| `f32`       | 8   | 4    | `float`     |                             |
+| `f64`       | 9   | 8    | `float`     |                             |
+| `string`    | 10  | 1    | `str`       |                             |
+| `symbol`    | 11  | \*   | `str`       |                             |
+| `timestamp` | 12  | 8    | `datetime`  |                             |
+| `date`      | 14  | 4    | `date`      | 0001.01.01 - 9999.12.31     |
+| `datetime`  | 15  | 8    | `datetime`  |                             |
+| `duration`  | 16  | 8    | `timedelta` |                             |
+| `time`      | 19  | 4    | `time`      | 00:00:00.000 - 23:59:59.999 |
+
+##### Composite Data Type
+
+| k type       | n    | size | python type    |
+| ------------ | ---- | ---- | -------------- |
+| `series`     | 1-15 | -    | `pl.Series`    |
+| `list`       | 90   | -    | `Tuple`        |
+| `dictionary` | 91   | \*   | `dict`         |
+| `dataframe`  | 92   | \*   | `pl.DataFrame` |
+
+#### Serialization
+
+##### Basic Data Type
+
+| python type | j type     | note                        |
+| ----------- | ---------- | --------------------------- |
+| `bool`      | `boolean`  |                             |
+| `int`       | `i64`      |                             |
+| `float`     | `f64`      |                             |
+| `str`       | `symbol`   |                             |
+| `bytes`     | `string`   |                             |
+| `date`      | `date`     | 0001.01.01 - 9999.12.31     |
+| `datetime`  | `datetime` |                             |
+| `timedelta` | `duration` |                             |
+| `time`      | `time`     | 00:00:00.000 - 23:59:59.999 |
+
+##### Dictionary, Series and DataFrame
+
+| python type    | j type    |
+| -------------- | --------- |
+| `dict`         | dict      |
+| `pl.Series`    | series    |
+| `pl.DataFrame` | dataframe |
+
+> for dictionary, requires `string` as keys.
+
+### q
+
+#### Deserialization
+
+##### Atom
 
 | k type      | n   | size | python type | note                        |
 | ----------- | --- | ---- | ----------- | --------------------------- |
@@ -30,7 +90,7 @@ a Python [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
 | `second`    | 18  | 4    | `time`      | 00:00:00 - 23:59:59         |
 | `time`      | 19  | 4    | `time`      | 00:00:00.000 - 23:59:59.999 |
 
-#### Composite Data Type
+##### Composite Data Type
 
 | k type           | n   | size | python type              |
 | ---------------- | --- | ---- | ------------------------ |
@@ -69,9 +129,9 @@ df.with_columns([
     ])
 ```
 
-### Serialization
+#### Serialization
 
-#### Basic Data Type
+##### Basic Data Type
 
 | python type | k type      | note                        |
 | ----------- | ----------- | --------------------------- |
@@ -86,7 +146,7 @@ df.with_columns([
 | `timedelta` | `timespan`  |                             |
 | `time`      | `time`      | 00:00:00.000 - 23:59:59.999 |
 
-#### Dictionary, Series and DataFrame
+##### Dictionary, Series and DataFrame
 
 | python type              | k type    |
 | ------------------------ | --------- |
@@ -117,13 +177,17 @@ df.with_columns([
 ```python
 import polars as pl
 import kola
-q = kola.Q('localhost', 1800)
+# Connect to j*, J and Q are both with j*
+conn = kola.J('localhost', 1800)
+
+# Connect to q
+conn = kola.Q('localhost', 1800)
 
 # with retries for IO Errors, 1s, 2s, 4s ...
-q = kola.Q('localhost', 1800, retries=3)
+conn = kola.J('localhost', 1800, retries=3)
 
 # with read timeout error, 2s, "Resource temporarily unavailable"
-q = kola.Q('localhost', 1800, retries=3, timeout=2)
+conn = kola.J('localhost', 1800, retries=3, timeout=2)
 ```
 
 ### Connect(Optional)
@@ -131,7 +195,7 @@ q = kola.Q('localhost', 1800, retries=3, timeout=2)
 Automatically connect when querying q process
 
 ```python
-q.connect()
+conn.connect()
 ```
 
 ### Disconnect
@@ -139,22 +203,13 @@ q.connect()
 Automatically disconnect if any IO error
 
 ```python
-q.disconnect()
+conn.disconnect()
 ```
 
 ### String Query
 
 ```python
-q.sync("select from trade where date=last date")
-```
-
-### Lambda Query
-
-When the first string starts with `{` and ends with `}`, it is treated as a lambda.
-
-```python
-d = {"a": 1, "b": 2}
-q.sync("{key x}", d)
+conn.sync("select from trade where date=last date")
 ```
 
 ### Functional Query
@@ -164,7 +219,7 @@ For functional query, `kola` supports Python [Basic Data Type](#basic-data-type)
 ```python
 from datetime import date, time
 
-q.sync(
+conn.sync(
     ".gw.query",
     "table",
     {
@@ -182,19 +237,19 @@ q.sync(
 
 ```python
 # pl_df is a Polars DataFrame
-q.sync("upsert", "table", pl_df)
+conn.sync("upsert", "table", pl_df)
 ```
 
 ```python
 # pd_df is a Pandas DataFrame, use pl.DateFrame to cast Pandas DataFrame
-q.sync("upsert", "table", pl.DataFrame(pd_df))
+conn.sync("upsert", "table", pl.DataFrame(pd_df))
 ```
 
 ### Async Query
 
 ```python
 # pl_df is a Polars DataFrame
-q.asyn("upsert", "table", pl_df)
+conn.asyn("upsert", "table", pl_df)
 ```
 
 ### Subscribe
@@ -202,10 +257,10 @@ q.asyn("upsert", "table", pl_df)
 ```python
 from kola import QType
 
-q.sync(".u.sub", pl.Series("", ["table1", "table2"], QType.Symbol), "")
+conn.sync(".u.sub", pl.Series("", ["table1", "table2"], QType.Symbol), "")
 
 # specify symbol filter
-q.sync(
+conn.sync(
     ".u.sub",
     pl.Series("", ["table1", "table2"], QType.Symbol),
     pl.Series("", ["sym1", "sym2"], QType.Symbol),
@@ -213,15 +268,15 @@ q.sync(
 
 while true:
     # ("upd", "table", pl.Dataframe)
-    upd = self.q.receive()
+    upd = conn.receive()
     print(upd)
 ```
 
-### Generate IPC
+### Generate IPC for q
 
 ```python
 import polars as pl
-from kola import generate_ipc
+from kola import serialize_as_ipc_bytes6
 
 df = pl.DataFrame(
     {
@@ -230,10 +285,10 @@ df = pl.DataFrame(
     }
 )
 # without compression
-buffer = generate_ipc("sync", False, ["upd", "table", df])
+buffer = serialize_as_ipc_bytes6("sync", False, ["upd", "table", df])
 
 # with compression
-buffer = generate_ipc("sync", True, ["upd", "table", df])
+buffer = serialize_as_ipc_bytes6("sync", True, ["upd", "table", df])
 ```
 
 ## Polars Documentations

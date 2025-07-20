@@ -29,6 +29,7 @@ features = [
   "dtype-date",
   "dtype-time",
   "ipc",
+  "ipc_streaming",
   "serde",
 ]
 

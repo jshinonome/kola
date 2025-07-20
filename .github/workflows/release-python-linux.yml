@@ -22,46 +22,12 @@ defaults:
     shell: bash
 
 jobs:
-  # create-sdist:
-  #   runs-on: ubuntu-20.04
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       package: [kola]
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         ref: ${{ inputs.sha }}
-
-  #     - name: Set up Python
-  #       uses: actions/setup-python@v5
-  #       with:
-  #         python-version: ${{ env.PYTHON_VERSION }}
-
-  #     - name: Build wheels
-  #       uses: PyO3/maturin-action@v1
-  #       with:
-  #         command: sdist
-  #         args: >
-  #           --manifest-path py-kola/Cargo.toml
-  #           --out dist
-
-  #     - name: Test sdist
-  #       run: |
-  #         pip install --force-reinstall --verbose dist/*.tar.gz
-  #         python -c 'import kola'
-
-  #     - name: Upload sdist
-  #       uses: actions/upload-artifact@v4
-  #       with:
-  #         name: sdist
-  #         path: dist/*.tar.gz
-
   build-wheels:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        # ubuntu-24.04 glibc 2.39
         os: [ubuntu-22.04]
         # manylinux aarch64 openssl doesn't work
         # architecture: [x86-64, aarch64]
@@ -103,13 +69,11 @@ jobs:
         with:
           command: build
           target: ${{ steps.target.outputs.target }}
-          # before-script-linux: /opt/_internal/build_scripts/build-openssl.sh
           args: >
             --release -i ${{ matrix.python-version }}
             --manifest-path py-kola/Cargo.toml
             --out dist
           container: off
-          # manylinux: "2_28"
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
@@ -128,12 +92,6 @@ jobs:
       id-token: write
 
     steps:
-      # - name: Download sdist
-      #   uses: actions/download-artifact@v4
-      #   with:
-      #     name: sdist-kola
-      #     path: dist
-
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:

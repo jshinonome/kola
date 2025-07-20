@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "kola"
-description = "a Python Polars interface to kdb+/q"
+description = "a Python Polars interface to j* and q"
 readme = "README.md"
 authors = [{ name = "Jo Shinonome", email = "jo.shinonome@gmail.com" }]
 license = { file = "LICENSE" }
@@ -21,7 +21,7 @@ classifiers = [
 ]
 keywords = ["q", "kdb", "polars", "dataframe", "arrow"]
 dynamic = ["version"]
-dependencies = ['polars >= 1.21.0', 'pyarrow >= 7.0.0']
+dependencies = ['polars >= 1.21.0', 'pyarrow >= 20.0.0']
 
 [tool.maturin]
 include = ["rust-toolchain.toml"]
