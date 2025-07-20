@@ -2,8 +2,7 @@
 
 ## kola
 
-a [Polars](https://pola-rs.github.io/polars/) Interface to kdb+/q
+a [Polars](https://pola-rs.github.io/polars/) Interface to `j*` and `q`
 
-- Python, [wiki](https://github.com/jshinonome/kola/wiki)
-- Rust, `crates/kola` of this repo
-- R, [rpolars with kola](https://github.com/jshinonome/r-polars) based on [rpolars](https://github.com/pola-rs/r-polars)
+- j6 IPC format is compatible with q IPC format
+- `j*` supports extra IPC format j9
