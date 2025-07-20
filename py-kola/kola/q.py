@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 with contextlib.suppress(ImportError):  # Module not available when building docs
-    from kola.kola import QConnector, QKolaIOError
+    from kola.kola import KolaConnector, KolaIOError
 
 logger = logging.getLogger("kola")
 
@@ -34,7 +34,7 @@ class Q(object):
         self.port = port
         self.user = user
         self.retries = retries
-        self.q = QConnector(host, port, user, passwd, enable_tls, timeout, 6)
+        self.q = KolaConnector(host, port, user, passwd, enable_tls, timeout, 6)
 
     def connect(self):
         self.q.connect()
@@ -51,7 +51,7 @@ class Q(object):
             while n < self.retries:
                 try:
                     return self.q.sync(expr, *args)
-                except QKolaIOError as e:
+                except KolaIOError as e:
                     logging.info(
                         "Failed to sync - '%s', retrying in %s seconds", e, 2**n
                     )
@@ -69,7 +69,7 @@ class Q(object):
             while n < self.retries:
                 try:
                     return self.q.asyn(expr, *args)
-                except QKolaIOError as e:
+                except KolaIOError as e:
                     logging.info(
                         "Failed to async - '%s', retrying in %s seconds", e, 2**n
                     )
@@ -87,7 +87,7 @@ class Q(object):
             while n < self.retries:
                 try:
                     return self.q.receive()
-                except QKolaIOError as e:
+                except KolaIOError as e:
                     logging.info(
                         "Failed to receive - '%s', retrying in %s seconds", e, 2**n
                     )

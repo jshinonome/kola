@@ -23,15 +23,15 @@ pub enum MsgType {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum K {
-    Bool(bool),
+pub enum J {
+    Boolean(bool),
     Guid(Uuid),
-    Byte(u8),
-    Short(i16),
-    Int(i32),
-    Long(i64),
-    Real(f32),
-    Float(f64),
+    U8(u8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
     Char(u8),
     Symbol(String),
     String(String),
@@ -39,41 +39,41 @@ pub enum K {
     Date(NaiveDate),           // date
     Time(NaiveTime),           // time, minute, second
     Duration(Duration),        // timespan
-    MixedList(Vec<K>),         // mixed list
+    MixedList(Vec<J>),         // mixed list
     Series(Series),            // list, dictionaries
     DataFrame(DataFrame),      // table and keyed table
-    Dict(IndexMap<String, K>), // dict, symbols -> atom or list
-    None(u8),
+    Dict(IndexMap<String, J>), // dict, symbols -> atom or list
+    Null,
 }
 
-impl K {
+impl J {
     pub fn len(&self) -> Result<usize, KolaError> {
         // k type + value
         match self {
-            K::Bool(_) => Ok(2),
-            K::Guid(_) => Ok(17),
-            K::Byte(_) => Ok(2),
-            K::Short(_) => Ok(3),
-            K::Int(_) => Ok(5),
-            K::Long(_) => Ok(9),
-            K::Real(_) => Ok(5),
-            K::Float(_) => Ok(9),
-            K::Char(_) => Ok(2),
-            K::Symbol(k) => Ok(k.len() + 2),
-            K::String(k) => Ok(k.len() + 6),
-            K::DateTime(_) => Ok(9),
-            K::Date(_) => Ok(5),
-            K::Time(_) => Ok(5),
-            K::Duration(_) => Ok(9),
-            K::MixedList(l) => {
+            J::Boolean(_) => Ok(2),
+            J::Guid(_) => Ok(17),
+            J::U8(_) => Ok(2),
+            J::I16(_) => Ok(3),
+            J::I32(_) => Ok(5),
+            J::I64(_) => Ok(9),
+            J::F32(_) => Ok(5),
+            J::F64(_) => Ok(9),
+            J::Char(_) => Ok(2),
+            J::Symbol(k) => Ok(k.len() + 2),
+            J::String(k) => Ok(k.len() + 6),
+            J::DateTime(_) => Ok(9),
+            J::Date(_) => Ok(5),
+            J::Time(_) => Ok(5),
+            J::Duration(_) => Ok(9),
+            J::MixedList(l) => {
                 let lens = l
                     .iter()
                     .map(|k| k.len())
                     .collect::<Result<Vec<_>, KolaError>>();
                 Ok(lens?.into_iter().sum::<usize>() + 6)
             }
-            K::Series(series) => get_series_len(series),
-            K::DataFrame(df) => {
+            J::Series(series) => get_series_len(series),
+            J::DataFrame(df) => {
                 // 98 0 99 + symbol list(6) + values(6)
                 let mut length: usize = 15;
                 for column in df.get_columns().into_iter() {
@@ -82,8 +82,8 @@ impl K {
                 }
                 Ok(length)
             }
-            K::None(_) => Ok(2),
-            K::Dict(dict) => {
+            J::Null => Ok(2),
+            J::Dict(dict) => {
                 let mut length = 13;
                 for (k, v) in dict.iter() {
                     length += k.len() + 1;
@@ -94,25 +94,25 @@ impl K {
         }
     }
 
-    pub fn from_any_value(a: AnyValue) -> K {
+    pub fn from_any_value(a: AnyValue) -> J {
         match a {
-            AnyValue::Boolean(b) => K::Bool(b),
-            AnyValue::String(s) => K::String(s.to_owned()),
-            AnyValue::UInt8(v) => K::Byte(v),
-            AnyValue::Int16(v) => K::Short(v),
-            AnyValue::Int32(v) => K::Int(v),
-            AnyValue::Int64(v) => K::Long(v),
-            AnyValue::Float32(v) => K::Real(v),
-            AnyValue::Float64(v) => K::Float(v),
-            AnyValue::Date(v) => K::Date(NaiveDate::from_num_days_from_ce_opt(v + 719163).unwrap()),
+            AnyValue::Boolean(b) => J::Boolean(b),
+            AnyValue::String(s) => J::String(s.to_owned()),
+            AnyValue::UInt8(v) => J::U8(v),
+            AnyValue::Int16(v) => J::I16(v),
+            AnyValue::Int32(v) => J::I32(v),
+            AnyValue::Int64(v) => J::I64(v),
+            AnyValue::Float32(v) => J::F32(v),
+            AnyValue::Float64(v) => J::F64(v),
+            AnyValue::Date(v) => J::Date(NaiveDate::from_num_days_from_ce_opt(v + 719163).unwrap()),
             AnyValue::Datetime(v, TimeUnit::Milliseconds, _) => {
-                K::DateTime(DateTime::from_timestamp_nanos(v * 1000000))
+                J::DateTime(DateTime::from_timestamp_nanos(v * 1000000))
             }
             AnyValue::Datetime(v, TimeUnit::Nanoseconds, _) => {
-                K::DateTime(DateTime::from_timestamp_nanos(v))
+                J::DateTime(DateTime::from_timestamp_nanos(v))
             }
-            AnyValue::Duration(v, TimeUnit::Nanoseconds) => K::Duration(Duration::nanoseconds(v)),
-            AnyValue::Time(v) => K::Time(
+            AnyValue::Duration(v, TimeUnit::Nanoseconds) => J::Duration(Duration::nanoseconds(v)),
+            AnyValue::Time(v) => J::Time(
                 NaiveTime::from_num_seconds_from_midnight_opt(
                     (v / 1000000000) as u32,
                     (v % 1000000000) as u32,
@@ -121,17 +121,17 @@ impl K {
             ),
             AnyValue::Categorical(i, g, _) => {
                 let sym = g.get(i);
-                K::Symbol(sym.to_owned())
+                J::Symbol(sym.to_owned())
             }
-            AnyValue::List(s) => K::Series(s),
-            AnyValue::StringOwned(s) => K::String(s.to_string()),
-            _ => K::None(0),
+            AnyValue::List(s) => J::Series(s),
+            AnyValue::StringOwned(s) => J::String(s.to_string()),
+            _ => J::Null,
         }
     }
 
     pub fn get_j_type_code(&self) -> i16 {
         match self {
-            K::Series(s) => match s.dtype() {
+            J::Series(s) => match s.dtype() {
                 PolarsDataType::Boolean => 1,
                 PolarsDataType::UInt8 => 2,
                 PolarsDataType::Int16 => 3,
@@ -148,45 +148,45 @@ impl K {
                 PolarsDataType::Categorical(_, _) => 14,
                 _ => 15,
             },
-            K::Bool(_) => -1,
-            K::Byte(_) => -2,
-            K::Short(_) => -3,
-            K::Int(_) => -4,
-            K::Long(_) => -5,
-            K::Date(_) => -6,
-            K::Time(_) => -7,
-            K::DateTime(_) => -9,
-            K::Duration(_) => -10,
-            K::Real(_) => -11,
-            K::Float(_) => -12,
-            K::String(_) => -13,
-            K::Symbol(_) => -14,
-            K::MixedList(_) => 90,
-            K::Dict(_) => 91,
-            K::DataFrame(_) => 92,
-            K::None(_) => 0,
+            J::Boolean(_) => -1,
+            J::U8(_) => -2,
+            J::I16(_) => -3,
+            J::I32(_) => -4,
+            J::I64(_) => -5,
+            J::Date(_) => -6,
+            J::Time(_) => -7,
+            J::DateTime(_) => -9,
+            J::Duration(_) => -10,
+            J::F32(_) => -11,
+            J::F64(_) => -12,
+            J::String(_) => -13,
+            J::Symbol(_) => -14,
+            J::MixedList(_) => 90,
+            J::Dict(_) => 91,
+            J::DataFrame(_) => 92,
+            J::Null => 0,
             _ => 100,
         }
     }
 }
 
-impl TryFrom<K> for Series {
+impl TryFrom<J> for Series {
     type Error = KolaError;
 
-    fn try_from(other: K) -> Result<Self, Self::Error> {
+    fn try_from(other: J) -> Result<Self, Self::Error> {
         match other {
-            K::Series(series) => Ok(series),
+            J::Series(series) => Ok(series),
             k => Err(KolaError::Err(format!("Not Series - {:?}", k))),
         }
     }
 }
 
-impl TryFrom<K> for DataFrame {
+impl TryFrom<J> for DataFrame {
     type Error = KolaError;
 
-    fn try_from(other: K) -> Result<Self, Self::Error> {
+    fn try_from(other: J) -> Result<Self, Self::Error> {
         match other {
-            K::DataFrame(df) => Ok(df),
+            J::DataFrame(df) => Ok(df),
             k => Err(KolaError::Err(format!("Not DataFrame - {:?}", k))),
         }
     }

@@ -14,7 +14,7 @@ use polars_arrow::types::NativeType;
 
 use crate::errors::KolaError;
 
-use crate::types::K;
+use crate::types::J;
 
 const DAY_DIFF: i32 = 719163;
 
@@ -31,29 +31,29 @@ const PADDING: [&[u8]; 8] = [
 
 const IPC_COMPRESS_THRESHOLD: usize = 1048576;
 
-pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
+pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<J, KolaError> {
     let code = vec[*pos];
     *pos += 4;
     let j;
     match code {
         255 => {
-            j = K::Bool(vec[*pos] == 1);
+            j = J::Boolean(vec[*pos] == 1);
             *pos += 4
         }
         254 => {
-            j = K::Byte(vec[*pos]);
+            j = J::U8(vec[*pos]);
             *pos += 4
         }
         253 => {
-            j = K::Short(i16::from_le_bytes(vec[*pos..*pos + 2].try_into().unwrap()));
+            j = J::I16(i16::from_le_bytes(vec[*pos..*pos + 2].try_into().unwrap()));
             *pos += 4
         }
         252 | 250 => {
             let i = i32::from_le_bytes(vec[*pos..*pos + 4].try_into().unwrap());
             if code == 252 {
-                j = K::Int(i);
+                j = J::I32(i);
             } else {
-                j = K::Date(
+                j = J::Date(
                     NaiveDate::from_num_days_from_ce_opt(i + DAY_DIFF).unwrap_or(NaiveDate::MAX),
                 );
             }
@@ -63,14 +63,14 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
             *pos += 4;
             let i = i64::from_le_bytes(vec[*pos..*pos + 8].try_into().unwrap());
             j = match code {
-                251 => K::Long(i),
+                251 => J::I64(i),
                 249 => {
                     let seconds = i / 1000000000;
                     let ns = i % 1000000000;
                     if i <= 0 {
-                        K::Time(NaiveTime::MIN)
+                        J::Time(NaiveTime::MIN)
                     } else {
-                        K::Time(
+                        J::Time(
                             NaiveTime::from_num_seconds_from_midnight_opt(
                                 seconds as u32,
                                 ns as u32,
@@ -90,14 +90,14 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
                     let seconds = i / 1000;
                     let ns = 1000000 * (i % 1000);
                     match DateTime::from_timestamp(seconds, ns as u32) {
-                        Some(dt) => K::DateTime(dt),
+                        Some(dt) => J::DateTime(dt),
                         None => {
                             if i > 0 {
-                                K::DateTime(
+                                J::DateTime(
                                     DateTime::from_timestamp(9223372036, 854775804).unwrap(),
                                 )
                             } else {
-                                K::DateTime(DateTime::from_timestamp(0, 0).unwrap())
+                                J::DateTime(DateTime::from_timestamp(0, 0).unwrap())
                             }
                         }
                     }
@@ -107,36 +107,36 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
                     let seconds = i / 1000000000;
                     let ns = i % 1000000000;
                     match DateTime::from_timestamp(seconds, ns as u32) {
-                        Some(dt) => K::DateTime(dt),
+                        Some(dt) => J::DateTime(dt),
                         None => {
                             if i > 0 {
-                                K::DateTime(
+                                J::DateTime(
                                     DateTime::from_timestamp(9223372036, 854775804).unwrap(),
                                 )
                             } else {
-                                K::DateTime(DateTime::from_timestamp(0, 0).unwrap())
+                                J::DateTime(DateTime::from_timestamp(0, 0).unwrap())
                             }
                         }
                     }
                 }
-                246 => K::Duration(Duration::nanoseconds(i)),
+                246 => J::Duration(Duration::nanoseconds(i)),
                 _ => unreachable!(),
             };
             *pos += 8
         }
         245 => {
             let f = f32::from_le_bytes(vec[*pos..*pos + 4].try_into().unwrap());
-            j = K::Real(f);
+            j = J::F32(f);
             *pos += 4
         }
         244 => {
             *pos += 4;
             let f = f64::from_le_bytes(vec[*pos..*pos + 8].try_into().unwrap());
-            j = K::Float(f);
+            j = J::F64(f);
             *pos += 8
         }
         0 => {
-            j = K::None(0);
+            j = J::Null;
             *pos += 4
         }
         243 | 242 | 128 => {
@@ -144,9 +144,9 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
             *pos += 4;
             let s = String::from_utf8(vec[*pos..*pos + byte_len].to_vec()).unwrap();
             j = if code == 243 {
-                K::String(s)
+                J::String(s)
             } else if code == 242 {
-                K::Symbol(s)
+                J::Symbol(s)
             } else {
                 return Err(KolaError::Err(s));
             };
@@ -166,7 +166,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
                 }
                 *pos += byte_len + PADDING[byte_len % 8].len();
             }
-            j = K::MixedList(list);
+            j = J::MixedList(list);
         }
         92 => {
             *pos += 4;
@@ -175,7 +175,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
             let df = IpcStreamReader::new(Cursor::new(&vec[*pos..*pos + byte_len]))
                 .finish()
                 .map_err(|e| KolaError::Err(e.to_string()))?;
-            j = K::DataFrame(df);
+            j = J::DataFrame(df);
             *pos += byte_len + PADDING[byte_len % 8].len();
         }
         1..=15 => {
@@ -185,7 +185,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
             let df = IpcStreamReader::new(Cursor::new(&vec[*pos..*pos + byte_len]))
                 .finish()
                 .map_err(|e| KolaError::Err(e.to_string()))?;
-            j = K::Series(
+            j = J::Series(
                 df.select_at_idx(0)
                     .unwrap()
                     .as_materialized_series()
@@ -206,9 +206,9 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
             *pos += 4;
 
             j = if dict_len == 0 {
-                K::Dict(IndexMap::new())
+                J::Dict(IndexMap::new())
             } else {
-                let mut dict: IndexMap<String, K> = IndexMap::with_capacity(dict_len);
+                let mut dict: IndexMap<String, J> = IndexMap::with_capacity(dict_len);
 
                 let byte_len = u64::from_le_bytes(vec[*pos..*pos + 8].try_into().unwrap()) as usize;
                 *pos += 8;
@@ -238,7 +238,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
                     );
                     prev_offset = offset;
                 }
-                K::Dict(dict)
+                J::Dict(dict)
             };
         }
         _ => return Err(KolaError::NotAbleDeserializeJTypeErr(code)),
@@ -258,61 +258,61 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<K, KolaError> {
 //     vec
 // }
 
-pub fn serialize(j: &K, compress: bool) -> Result<Vec<u8>, KolaError> {
+pub fn serialize(j: &J, compress: bool) -> Result<Vec<u8>, KolaError> {
     // -1 => 255
     let code = j.get_j_type_code() as u8;
     let size = estimate_size(j, compress)?;
     let mut vec: Vec<u8> = Vec::with_capacity(size);
     vec.write(&[code, 0, 0, 0]).unwrap();
     match j {
-        K::Bool(v) => {
+        J::Boolean(v) => {
             vec.write(&[(*v as u8), 0, 0, 0]).unwrap();
         }
-        K::Byte(v) => {
+        J::U8(v) => {
             vec.write(&[*v, 0, 0, 0]).unwrap();
         }
-        K::Short(v) => {
+        J::I16(v) => {
             vec.write(&(*v as i32).to_le_bytes()).unwrap();
         }
-        K::Int(v) => {
+        J::I32(v) => {
             vec.write(&v.to_le_bytes()).unwrap();
         }
-        K::Date(v) => {
+        J::Date(v) => {
             vec.write(&(v.num_days_from_ce() - 719163).to_le_bytes())
                 .unwrap();
         }
-        K::Long(v) => {
+        J::I64(v) => {
             vec.write(&[0, 0, 0, 0]).unwrap();
             vec.write(&v.to_le_bytes()).unwrap();
         }
-        K::Time(v) => {
+        J::Time(v) => {
             vec.write(&[0, 0, 0, 0]).unwrap();
             let ns = (v.num_seconds_from_midnight() as i64) * 1000_000_000 + v.nanosecond() as i64;
             vec.write(&ns.to_le_bytes()).unwrap();
         }
-        K::DateTime(v) => {
+        J::DateTime(v) => {
             vec.write(&[0, 0, 0, 0]).unwrap();
             vec.write(&v.timestamp_nanos_opt().unwrap().to_le_bytes())
                 .unwrap();
         }
-        K::Duration(v) => {
+        J::Duration(v) => {
             vec.write(&[0, 0, 0, 0]).unwrap();
             vec.write(&v.num_nanoseconds().unwrap().to_le_bytes())
                 .unwrap();
         }
-        K::Real(v) => {
+        J::F32(v) => {
             vec.write(&v.to_le_bytes()).unwrap();
         }
-        K::Float(v) => {
+        J::F64(v) => {
             vec.write(&[0, 0, 0, 0]).unwrap();
             vec.write(&v.to_le_bytes()).unwrap();
         }
-        K::Symbol(s) | K::String(s) => {
+        J::Symbol(s) | J::String(s) => {
             vec.write(&(s.len() as u32).to_le_bytes()).unwrap();
             vec.write(s.as_bytes()).unwrap();
             vec.write(&PADDING[s.len() % 8]).unwrap();
         }
-        K::Series(s) => {
+        J::Series(s) => {
             let mut df = s.clone().into_frame();
             vec.write(&[0, 0, 0, 0]).unwrap();
             vec.write(&0u64.to_le_bytes()).unwrap();
@@ -331,7 +331,7 @@ pub fn serialize(j: &K, compress: bool) -> Result<Vec<u8>, KolaError> {
             }
             vec.write(&PADDING[length % 8]).unwrap();
         }
-        K::MixedList(l) => {
+        J::MixedList(l) => {
             // length of list
             vec.write(&(l.len() as u32).to_le_bytes()).unwrap();
             if l.len() > 0 {
@@ -357,7 +357,7 @@ pub fn serialize(j: &K, compress: bool) -> Result<Vec<u8>, KolaError> {
         //     let v8 = unsafe { core::slice::from_raw_parts(ptr, m.len() * 8) };
         //     vec.write(v8).unwrap();
         // }
-        K::Dict(d) => {
+        J::Dict(d) => {
             let d_len = d.len();
             vec.write(&(d_len as u32).to_le_bytes()).unwrap();
             if d_len > 0 {
@@ -408,7 +408,7 @@ pub fn serialize(j: &K, compress: bool) -> Result<Vec<u8>, KolaError> {
                 }
             }
         }
-        K::DataFrame(df) => {
+        J::DataFrame(df) => {
             vec.write(&[0, 0, 0, 0]).unwrap();
             let compression = if compress && df.estimated_size() > IPC_COMPRESS_THRESHOLD {
                 Some(IpcCompression::LZ4)
@@ -427,7 +427,7 @@ pub fn serialize(j: &K, compress: bool) -> Result<Vec<u8>, KolaError> {
             }
             vec.write(&PADDING[length % 8]).unwrap();
         }
-        K::None(_) => {
+        J::Null => {
             vec.write(&[0, 0, 0, 0]).unwrap();
         }
         _ => return Err(KolaError::NotAbleToSerializeErr(format!("{:?}", j))),
@@ -435,19 +435,19 @@ pub fn serialize(j: &K, compress: bool) -> Result<Vec<u8>, KolaError> {
     Ok(vec)
 }
 
-fn estimate_size(j: &K, compress: bool) -> Result<usize, KolaError> {
+fn estimate_size(j: &J, compress: bool) -> Result<usize, KolaError> {
     match j {
         // 4 bytes type code, 4 bytes value
-        K::None(_) => Ok(8),
-        K::Bool(_) | K::Byte(_) => Ok(8),
-        K::Short(_) => Ok(8),
-        K::Int(_) | K::Date(_) | K::Real(_) => Ok(8),
+        J::Null => Ok(8),
+        J::Boolean(_) | J::U8(_) => Ok(8),
+        J::I16(_) => Ok(8),
+        J::I32(_) | J::Date(_) | J::F32(_) => Ok(8),
         // 8 bytes type code, 8 bytes value
-        K::Long(_) | K::Time(_) | K::DateTime(_) | K::Duration(_) | K::Float(_) => Ok(16),
+        J::I64(_) | J::Time(_) | J::DateTime(_) | J::Duration(_) | J::F64(_) => Ok(16),
         // 4 bytes type code, 4 bytes length, string bytes, padding
-        K::Symbol(s) | K::String(s) => Ok(16 + s.len()),
+        J::Symbol(s) | J::String(s) => Ok(16 + s.len()),
         // 4 bytes type code, 4 bytes length, series bytes, padding
-        K::Series(s) => {
+        J::Series(s) => {
             let estimated_size = s.estimated_size();
             let ratio = if compress && estimated_size > IPC_COMPRESS_THRESHOLD {
                 647
@@ -457,7 +457,7 @@ fn estimate_size(j: &K, compress: bool) -> Result<usize, KolaError> {
             Ok(1699 + (estimated_size * ratio / 1000) as usize)
         }
         // 4 bytes type code, 4 bytes length, list bytes, padding
-        K::MixedList(l) => {
+        J::MixedList(l) => {
             let v = l
                 .iter()
                 .map(|j| estimate_size(j, compress))
@@ -466,7 +466,7 @@ fn estimate_size(j: &K, compress: bool) -> Result<usize, KolaError> {
         }
         // not supported yet
         // K::Matrix(m) => Ok(5 + m.len() * 8 + 8),
-        K::Dict(d) => {
+        J::Dict(d) => {
             // 4 - dict type code
             // 4 - item length of dict
             // 8 - byte length of j dict
@@ -487,7 +487,7 @@ fn estimate_size(j: &K, compress: bool) -> Result<usize, KolaError> {
             }
         }
         // 8 bytes type code, 8 bytes length, dataframe bytes, padding
-        K::DataFrame(df) => {
+        J::DataFrame(df) => {
             let estimated_size = df.estimated_size();
             let ratio = if compress && estimated_size > IPC_COMPRESS_THRESHOLD {
                 647
@@ -507,7 +507,7 @@ fn estimate_size(j: &K, compress: bool) -> Result<usize, KolaError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::K;
+    use crate::types::J;
     use crate::{serde9::deserialize, serde9::serialize};
     use chrono::{DateTime, Duration, NaiveDate, NaiveTime};
     use indexmap::IndexMap;
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn serde_bool() {
-        let j = K::Bool(true);
+        let j = J::Boolean(true);
         let v8: &[u8] = &[255, 0, 0, 0, 1, 0, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn serde_u8() {
-        let j = K::Byte(1);
+        let j = J::U8(1);
         let v8: &[u8] = &[254, 0, 0, 0, 1, 0, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn serde_i16() {
-        let j = K::Short(258);
+        let j = J::I16(258);
         let v8: &[u8] = &[253, 0, 0, 0, 2, 1, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn serde_i32() {
-        let j = K::Int(16909060);
+        let j = J::I32(16909060);
         let v8: &[u8] = &[252, 0, 0, 0, 4, 3, 2, 1];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn serde_i64() {
-        let j = K::Long(72623859790382856);
+        let j = J::I64(72623859790382856);
         let v8: &[u8] = &[251, 0, 0, 0, 0, 0, 0, 0, 8, 7, 6, 5, 4, 3, 2, 1];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn serde_date() {
-        let j = K::Date(NaiveDate::from_num_days_from_ce_opt(16909060 + 719163).unwrap());
+        let j = J::Date(NaiveDate::from_num_days_from_ce_opt(16909060 + 719163).unwrap());
         let v8: &[u8] = &[250, 0, 0, 0, 4, 3, 2, 1];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn serde_time() {
-        let j = K::Time(NaiveTime::from_num_seconds_from_midnight_opt(86399, 999_999_999).unwrap());
+        let j = J::Time(NaiveTime::from_num_seconds_from_midnight_opt(86399, 999_999_999).unwrap());
         let v8: &[u8] = &[249, 0, 0, 0, 0, 0, 0, 0, 255, 255, 78, 145, 148, 78, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn serde_datetime() {
-        let j = K::DateTime(DateTime::from_timestamp_nanos(86399999_999_999));
+        let j = J::DateTime(DateTime::from_timestamp_nanos(86399999_999_999));
         let v8: &[u8] = &[247, 0, 0, 0, 0, 0, 0, 0, 255, 255, 78, 145, 148, 78, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn serde_duration() {
-        let j = K::Duration(Duration::nanoseconds(86399999999999));
+        let j = J::Duration(Duration::nanoseconds(86399999999999));
         let v8: &[u8] = &[246, 0, 0, 0, 0, 0, 0, 0, 255, 255, 78, 145, 148, 78, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -588,7 +588,7 @@ mod tests {
 
     #[test]
     fn serde_f32() {
-        let j = K::Real(9.9e10);
+        let j = J::F32(9.9e10);
         let v8: &[u8] = &[245, 0, 0, 0, 225, 102, 184, 81];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn serde_f64() {
-        let j = K::Float(9.9e10);
+        let j = J::F64(9.9e10);
         let v8: &[u8] = &[244, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 220, 12, 55, 66];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn serde_string() {
-        let j = K::String("🍺".to_owned());
+        let j = J::String("🍺".to_owned());
         let v8: &[u8] = &[243, 0, 0, 0, 4, 0, 0, 0, 240, 159, 141, 186, 0, 0, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn serde_symbol() {
-        let j = K::Symbol("".to_owned());
+        let j = J::Symbol("".to_owned());
         let v8: &[u8] = &[242, 0, 0, 0, 0, 0, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn serde_series() {
-        let j = K::Series(Series::new("".into(), [0, 1, 2, 3]));
+        let j = J::Series(Series::new("".into(), [0, 1, 2, 3]));
         let v8: &[u8] = &[
             4, 0, 0, 0, 0, 0, 0, 0, 80, 1, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 120, 0, 0, 0, 4,
             0, 0, 0, 242, 255, 255, 255, 20, 0, 0, 0, 4, 0, 1, 0, 0, 0, 10, 0, 11, 0, 8, 0, 10, 0,
@@ -654,10 +654,10 @@ mod tests {
 
     #[test]
     fn serde_mixed_list() {
-        let j = K::MixedList(vec![
-            K::Byte(9),
-            K::Date(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
-            K::None(0),
+        let j = J::MixedList(vec![
+            J::U8(9),
+            J::Date(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
+            J::Null,
         ]);
         let v8: &[u8] = &[
             90, 0, 0, 0, 3, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 254, 0, 0, 0, 9, 0, 0, 0, 250, 0, 0,
@@ -670,13 +670,13 @@ mod tests {
     #[test]
     fn serde_dict() {
         let mut dict = IndexMap::new();
-        dict.insert("byte".to_owned(), K::Byte(9));
+        dict.insert("byte".to_owned(), J::U8(9));
         dict.insert(
             "date".to_owned(),
-            K::Date(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
+            J::Date(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
         );
-        dict.insert("null".to_owned(), K::None(0));
-        let j = K::Dict(dict);
+        dict.insert("null".to_owned(), J::Null);
+        let j = J::Dict(dict);
         let v8: &[u8] = &[
             91, 0, 0, 0, 3, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
             8, 0, 0, 0, 12, 0, 0, 0, 98, 121, 116, 101, 100, 97, 116, 101, 110, 117, 108, 108, 24,
@@ -692,7 +692,7 @@ mod tests {
         let df = df!("Element" => &["Copper", "Silver", "Gold"],
         "Melting Point (K)" => &[1357.77, 1234.93, 1337.33])
         .unwrap();
-        let j = K::DataFrame(df);
+        let j = J::DataFrame(df);
         let v8: &[u8] = &[
             92, 0, 0, 0, 0, 0, 0, 0, 72, 2, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 176, 0, 0, 0, 4,
             0, 0, 0, 242, 255, 255, 255, 20, 0, 0, 0, 4, 0, 1, 0, 0, 0, 10, 0, 11, 0, 8, 0, 10, 0,
@@ -725,7 +725,7 @@ mod tests {
 
     #[test]
     fn serde_null() {
-        let j = K::None(0);
+        let j = J::Null;
         let v8: &[u8] = &[0, 0, 0, 0, 0, 0, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);

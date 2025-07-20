@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import polars as pl
 import pytest
 
-from kola import Q, QKolaError, QKolaIOError
+from kola import KolaError, KolaIOError, Q
 
 logger = logging.getLogger(__name__)
 
@@ -202,9 +202,9 @@ def test_read_list(q, query, expect):
 
 
 def test_error(q):
-    with pytest.raises(QKolaError, match="type"):
+    with pytest.raises(KolaError, match="type"):
         q.sync("1+`a")
-    with pytest.raises(QKolaError, match='"Not supported empty dictionary"'):
+    with pytest.raises(KolaError, match='"Not supported empty dictionary"'):
         q.sync('"()!()"', {})
 
 
@@ -217,7 +217,7 @@ def test_auto_connect(q):
 def test_io_error():
     q = Q("DUMMY", 1800)
     with pytest.raises(
-        QKolaIOError,
+        KolaIOError,
         match="failed to lookup address information: Name or service not known",
     ):
         q.sync("1+`a")

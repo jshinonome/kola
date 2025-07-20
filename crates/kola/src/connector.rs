@@ -1,7 +1,7 @@
 use crate::errors::KolaError;
 use crate::serde6::{compress, decompress, deserialize, serialize};
 use crate::serde9;
-use crate::types::{MsgType, K};
+use crate::types::{MsgType, J};
 use native_tls::TlsConnector;
 use std::error::Error;
 use std::io::{self, Read as IoRead, Write as IoWrite};
@@ -17,7 +17,7 @@ impl<S: IoRead + IoWrite> QStream for S {
     }
 }
 
-pub struct Q {
+pub struct Connector {
     pub enable_tls: bool,
     pub is_local: bool,
     pub port: u16,
@@ -29,7 +29,7 @@ pub struct Q {
     stream: Option<Box<dyn QStream + Send + Sync>>,
 }
 
-impl Q {
+impl Connector {
     pub fn new(
         host: &str,
         port: u16,
@@ -45,7 +45,7 @@ impl Q {
         } else {
             false
         };
-        Q {
+        Connector {
             host: host.to_string(),
             port,
             user: user.to_string(),
@@ -82,7 +82,7 @@ impl Q {
         }
     }
 
-    pub fn send(&mut self, msg_type: MsgType, expr: &str, args: &Vec<K>) -> Result<(), KolaError> {
+    pub fn send(&mut self, msg_type: MsgType, expr: &str, args: &Vec<J>) -> Result<(), KolaError> {
         if self.version <= 6 {
             if let Some(stream) = &mut self.stream {
                 let expr = expr.trim();
@@ -169,7 +169,7 @@ impl Q {
                 // serde::serialize(stream, args.get_item(0).unwrap())
                 if args.len() == 0 {
                     let vec: Vec<u8> =
-                        serde9::serialize(&K::String(expr.to_string()), !self.is_local)?;
+                        serde9::serialize(&J::String(expr.to_string()), !self.is_local)?;
                     stream.write(&[1, msg_type as u8, 0, 0, 0, 0, 0, 0])?;
                     stream.write(&vec.len().to_le_bytes())?;
                     match stream.write_all(&vec) {
@@ -182,7 +182,7 @@ impl Q {
                 } else {
                     let mut vectors: Vec<Vec<u8>> = Vec::with_capacity(args.len() + 1);
                     vectors.push(serde9::serialize(
-                        &K::String(expr.to_string()),
+                        &J::String(expr.to_string()),
                         !self.is_local,
                     )?);
                     for k in args.into_iter() {
@@ -213,7 +213,7 @@ impl Q {
         }
     }
 
-    pub fn receive(&mut self) -> Result<K, KolaError> {
+    pub fn receive(&mut self) -> Result<J, KolaError> {
         if self.version <= 6 {
             if let Some(stream) = &mut self.stream {
                 let mut header = [0u8; 8];
@@ -346,7 +346,7 @@ impl Q {
         }
     }
 
-    pub fn execute(&mut self, expr: &str, args: &Vec<K>) -> Result<K, KolaError> {
+    pub fn execute(&mut self, expr: &str, args: &Vec<J>) -> Result<J, KolaError> {
         if self.stream.is_none() {
             self.connect()?;
         };
@@ -354,7 +354,7 @@ impl Q {
         self.receive()
     }
 
-    pub fn execute_async(&mut self, expr: &str, args: &Vec<K>) -> Result<(), KolaError> {
+    pub fn execute_async(&mut self, expr: &str, args: &Vec<J>) -> Result<(), KolaError> {
         if self.stream.is_none() {
             self.connect()?;
         };

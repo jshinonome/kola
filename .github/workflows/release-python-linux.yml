@@ -45,12 +45,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Set RUSTFLAGS for x86-64
-        if: matrix.architecture == 'x86-64' && matrix.os != 'macos-latest'
+        if: matrix.architecture == 'x86-64'
         run: echo "RUSTFLAGS=-C target-feature=+sse3,+ssse3,+sse4.1,+sse4.2,+popcnt,+avx,+avx2,+fma,+bmi1,+bmi2,+lzcnt" >> $GITHUB_ENV
-
-      - name: Set RUSTFLAGS for x86-64 MacOS
-        if: matrix.architecture == 'x86-64' && matrix.os == 'macos-latest'
-        run: echo "RUSTFLAGS=-C target-feature=+sse3,+ssse3,+sse4.1,+sse4.2,+popcnt,+avx,+fma" >> $GITHUB_ENV
 
       - name: Set Rust target for aarch64
         if: matrix.architecture == 'aarch64'

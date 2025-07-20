@@ -1,0 +1,37 @@
+# https://taskfile.dev
+
+version: "3"
+
+tasks:
+  default:
+    cmds:
+      - cargo update
+    silent: true
+
+  venv:
+    cmds:
+      - uv venv --python 3.12
+      - uv pip install pip
+      - uv pip install -r py-kola/requirements.txt
+      - source .venv/bin/activate
+
+  test:
+    cmds:
+      - cargo test
+      - make test-python
+
+  build-python:
+    dir: py-kola
+    cmds:
+      - maturin develop --strip
+
+  release-python:
+    dir: py-kola
+    cmds:
+      - maturin build --release
+      - uv pip install ../target/wheels/*
+
+  test-python:
+    dir: py-kola
+    cmds:
+      - pytest -vv

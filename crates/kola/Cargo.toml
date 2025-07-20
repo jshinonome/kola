@@ -9,13 +9,13 @@ crate-type = ["lib"]
 
 [dependencies]
 native-tls = "0.2.14"
-chrono = "0.4.40"
+chrono = "0.4.41"
 polars-arrow = { workspace = true }
 thiserror = "2.0.12"
 rayon = "1.10.0"
-uuid = "1.16.0"
-lz4_flex = { version = "0.11.3", features = ["frame"] }
-indexmap = "2.8.0"
+uuid = "1.17.0"
+lz4_flex = { version = "0.11.5", features = ["frame"] }
+indexmap = "2.10.0"
 
 [dependencies.polars]
 workspace = true

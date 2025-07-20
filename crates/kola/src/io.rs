@@ -9,9 +9,9 @@ use xxhash_rust::xxh32;
 
 use crate::errors::KolaError;
 use crate::serde6;
-use crate::types::{MsgType, K};
+use crate::types::{MsgType, J};
 
-pub fn read_binary_table(path: &str) -> Result<DataFrame, KolaError> {
+pub fn read_j6_binary_table(path: &str) -> Result<DataFrame, KolaError> {
     let f = File::open(path).map_err(|e| KolaError::IOError(e))?;
     let mut reader = BufReader::new(f);
     let mut buffer = Vec::new();
@@ -22,7 +22,7 @@ pub fn read_binary_table(path: &str) -> Result<DataFrame, KolaError> {
         buffer = unzip(&buffer)?;
     }
     match serde6::deserialize(&buffer, &mut 2, false)? {
-        K::DataFrame(k) => Ok(k),
+        J::DataFrame(k) => Ok(k),
         _ => Err(KolaError::Err("Not a table".to_owned())),
     }
 }
@@ -74,10 +74,10 @@ pub fn unzip_lz4(buf: &Vec<u8>, footer_index: usize, block_num: usize) -> Vec<u8
     unzipped_bytes
 }
 
-pub fn generate_ipc_msg(
+pub fn generate_j6_ipc_msg(
     msg_type: MsgType,
     enable_compression: bool,
-    k: K,
+    k: J,
 ) -> Result<Vec<u8>, KolaError> {
     let length = k.len()?;
     let mut vec: Vec<u8> = Vec::with_capacity(length + 8);
@@ -91,7 +91,7 @@ pub fn generate_ipc_msg(
     }
 }
 
-pub fn deserialize(buf: &[u8]) -> Result<K, KolaError> {
+pub fn deserialize_j6(buf: &[u8]) -> Result<J, KolaError> {
     serde6::deserialize(buf, &mut 0, false)
 }
 
