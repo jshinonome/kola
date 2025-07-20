@@ -177,7 +177,7 @@ df.with_columns([
 ```python
 import polars as pl
 import kola
-# Connect to j*, J and Q are both with j*
+# Connect to j*, J and Q both work with j*
 conn = kola.J('localhost', 1800)
 
 # Connect to q

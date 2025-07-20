@@ -34,23 +34,23 @@ class J(object):
         self.port = port
         self.user = user
         self.retries = retries
-        self.q = KolaConnector(host, port, user, passwd, enable_tls, timeout, 9)
+        self.j = KolaConnector(host, port, user, passwd, enable_tls, timeout, 9)
 
     def connect(self):
-        self.q.connect()
+        self.j.connect()
 
     def disconnect(self):
-        self.q.shutdown()
+        self.j.shutdown()
 
     def sync(self, expr: str, *args) -> Any:
         if self.retries <= 0:
-            return self.q.sync(expr, *args)
+            return self.j.sync(expr, *args)
         else:
             n = 0
             # exponential backoff
             while n < self.retries:
                 try:
-                    return self.q.sync(expr, *args)
+                    return self.j.sync(expr, *args)
                 except KolaIOError as e:
                     logging.info(
                         "Failed to sync - '%s', retrying in %s seconds", e, 2**n
@@ -62,13 +62,13 @@ class J(object):
 
     def asyn(self, expr: str, *args) -> None:
         if self.retries <= 0:
-            return self.q.asyn(expr, *args)
+            return self.j.asyn(expr, *args)
         else:
             n = 0
             # exponential backoff
             while n < self.retries:
                 try:
-                    return self.q.asyn(expr, *args)
+                    return self.j.asyn(expr, *args)
                 except KolaIOError as e:
                     logging.info(
                         "Failed to async - '%s', retrying in %s seconds", e, 2**n
@@ -80,13 +80,13 @@ class J(object):
 
     def receive(self) -> Any:
         if self.retries <= 0:
-            return self.q.receive()
+            return self.j.receive()
         else:
             n = 0
             # exponential backoff
             while n < self.retries:
                 try:
-                    return self.q.receive()
+                    return self.j.receive()
                 except KolaIOError as e:
                     logging.info(
                         "Failed to receive - '%s', retrying in %s seconds", e, 2**n
