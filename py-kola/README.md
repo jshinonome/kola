@@ -1,6 +1,6 @@
 # kola
 
-a Python [Polars](https://pola-rs.github.io/polars/) Interface to j\* and q
+a Python [Polars](https://pola-rs.github.io/polars/) Interface to `j*` and `q`
 
 ## Basic Data Type Map
 
