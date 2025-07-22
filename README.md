@@ -4,5 +4,5 @@
 
 a [Polars](https://pola-rs.github.io/polars/) Interface to `j*` and `q`
 
-- j6 IPC format is compatible with q IPC format
-- `j*` supports extra IPC format j9
+- IPC format j6 is compatible with q IPC format
+- IPC format j9 is only supported by `j*`
