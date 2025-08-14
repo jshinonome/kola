@@ -40,11 +40,7 @@ impl Connector {
         version: u8,
     ) -> Self {
         let host = if host.is_empty() { "127.0.0.1" } else { host };
-        let is_local = if host == "127.0.0.1" || host == "localhost" {
-            true
-        } else {
-            false
-        };
+        let is_local = host == "127.0.0.1" || host == "localhost";
         Connector {
             host: host.to_string(),
             port,
@@ -82,19 +78,19 @@ impl Connector {
         }
     }
 
-    pub fn send(&mut self, msg_type: MsgType, expr: &str, args: &Vec<J>) -> Result<(), KolaError> {
+    pub fn send(&mut self, msg_type: MsgType, expr: &str, args: &[J]) -> Result<(), KolaError> {
         if self.version <= 6 {
             if let Some(stream) = &mut self.stream {
                 let expr = expr.trim();
                 // serde::serialize(stream, args.get_item(0).unwrap())
-                if args.len() == 0 {
+                if args.is_empty() {
                     let length = 8 + 6 + expr.len();
                     let mut vec: Vec<u8> = Vec::with_capacity(length);
-                    vec.write(&[1, msg_type as u8, 0, 0])?;
-                    vec.write(&(length as u32).to_le_bytes())?;
-                    vec.write(&[10, 0])?;
-                    vec.write(&(expr.len() as u32).to_le_bytes())?;
-                    vec.write(expr.as_bytes())?;
+                    vec.write_all(&[1, msg_type as u8, 0, 0])?;
+                    vec.write_all(&(length as u32).to_le_bytes())?;
+                    vec.write_all(&[10, 0])?;
+                    vec.write_all(&(expr.len() as u32).to_le_bytes())?;
+                    vec.write_all(expr.as_bytes())?;
                     match stream.write_all(&vec) {
                         Ok(_) => Ok(()),
                         Err(e) => {
@@ -107,7 +103,7 @@ impl Connector {
                         return Err(KolaError::TooManyArgumentErr());
                     }
                     let mut vectors: Vec<Vec<u8>> = Vec::with_capacity(args.len());
-                    for k in args.into_iter() {
+                    for k in args.iter() {
                         vectors.push(serialize(k)?)
                     }
                     let is_lambda = expr.starts_with("{") && expr.ends_with("}");
@@ -123,16 +119,16 @@ impl Connector {
                     }
                     let mut vec: Vec<u8> = Vec::with_capacity(length);
                     let length_ext = (total_length >> 32) as u8;
-                    vec.write(&[1, msg_type as u8, 0, length_ext])?;
-                    vec.write(&(total_length as u32).to_le_bytes())?;
-                    vec.write(&[0, 0])?;
-                    vec.write(&((args.len() + 1) as u32).to_le_bytes())?;
+                    vec.write_all(&[1, msg_type as u8, 0, length_ext])?;
+                    vec.write_all(&(total_length as u32).to_le_bytes())?;
+                    vec.write_all(&[0, 0])?;
+                    vec.write_all(&((args.len() + 1) as u32).to_le_bytes())?;
                     if is_lambda {
-                        vec.write(&[100, 0])?;
+                        vec.write_all(&[100, 0])?;
                     }
-                    vec.write(&[10, 0])?;
-                    vec.write(&(expr.len() as u32).to_le_bytes())?;
-                    vec.write(expr.as_bytes())?;
+                    vec.write_all(&[10, 0])?;
+                    vec.write_all(&(expr.len() as u32).to_le_bytes())?;
+                    vec.write_all(expr.as_bytes())?;
                     if self.is_local || total_length < 10_000_000 {
                         match stream.write_all(&vec) {
                             Ok(_) => (),
@@ -163,53 +159,50 @@ impl Connector {
             } else {
                 Err(KolaError::NotConnectedErr())
             }
-        } else {
-            if let Some(stream) = &mut self.stream {
-                let expr = expr.trim();
-                // serde::serialize(stream, args.get_item(0).unwrap())
-                if args.len() == 0 {
-                    let vec: Vec<u8> =
-                        serde9::serialize(&J::String(expr.to_string()), !self.is_local)?;
-                    stream.write(&[1, msg_type as u8, 0, 0, 0, 0, 0, 0])?;
-                    stream.write(&vec.len().to_le_bytes())?;
-                    match stream.write_all(&vec) {
-                        Ok(_) => Ok(()),
-                        Err(e) => {
-                            self.shutdown()?;
-                            Err(KolaError::IOError(e))
-                        }
+        } else if let Some(stream) = &mut self.stream {
+            let expr = expr.trim();
+            // serde::serialize(stream, args.get_item(0).unwrap())
+            if args.is_empty() {
+                let vec: Vec<u8> = serde9::serialize(&J::String(expr.to_string()), !self.is_local)?;
+                stream.write_all(&[1, msg_type as u8, 0, 0, 0, 0, 0, 0])?;
+                stream.write_all(&vec.len().to_le_bytes())?;
+                match stream.write_all(&vec) {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        self.shutdown()?;
+                        Err(KolaError::IOError(e))
                     }
-                } else {
-                    let mut vectors: Vec<Vec<u8>> = Vec::with_capacity(args.len() + 1);
-                    vectors.push(serde9::serialize(
-                        &J::String(expr.to_string()),
-                        !self.is_local,
-                    )?);
-                    for k in args.into_iter() {
-                        vectors.push(serde9::serialize(k, !self.is_local)?)
-                    }
-                    let total_length = vectors.iter().map(|v| v.len()).sum::<usize>();
-                    // 8 bytes header
-                    stream.write(&[1, msg_type as u8, 0, 0, 0, 0, 0, 0])?;
-                    // 8 bytes total length
-                    stream.write(&(16 + total_length).to_le_bytes())?;
-                    stream.write(&[90, 0, 0, 0])?;
-                    stream.write(&(vectors.len() as u32).to_le_bytes())?;
-                    stream.write(&total_length.to_le_bytes())?;
-                    for vector in vectors.into_iter() {
-                        match stream.write_all(&vector) {
-                            Ok(_) => (),
-                            Err(e) => {
-                                self.shutdown()?;
-                                return Err(KolaError::IOError(e));
-                            }
-                        }
-                    }
-                    Ok(())
                 }
             } else {
-                Err(KolaError::NotConnectedErr())
+                let mut vectors: Vec<Vec<u8>> = Vec::with_capacity(args.len() + 1);
+                vectors.push(serde9::serialize(
+                    &J::String(expr.to_string()),
+                    !self.is_local,
+                )?);
+                for k in args.iter() {
+                    vectors.push(serde9::serialize(k, !self.is_local)?)
+                }
+                let total_length = vectors.iter().map(|v| v.len()).sum::<usize>();
+                // 8 bytes header
+                stream.write_all(&[1, msg_type as u8, 0, 0, 0, 0, 0, 0])?;
+                // 8 bytes total length
+                stream.write_all(&(16 + total_length).to_le_bytes())?;
+                stream.write_all(&[90, 0, 0, 0])?;
+                stream.write_all(&(vectors.len() as u32).to_le_bytes())?;
+                stream.write_all(&total_length.to_le_bytes())?;
+                for vector in vectors.into_iter() {
+                    match stream.write_all(&vector) {
+                        Ok(_) => (),
+                        Err(e) => {
+                            self.shutdown()?;
+                            return Err(KolaError::IOError(e));
+                        }
+                    }
+                }
+                Ok(())
             }
+        } else {
+            Err(KolaError::NotConnectedErr())
         }
     }
 
@@ -231,7 +224,7 @@ impl Connector {
                 }
                 let compression_mode = header[2];
                 let mut length = u32::from_le_bytes(header[4..].try_into().unwrap()) as usize;
-                length = length + ((header[3] as usize) << 32);
+                length += (header[3] as usize) << 32;
                 let mut vec: Vec<u8> = vec![0u8; length - 8];
                 match stream.read_exact(&mut vec) {
                     Ok(_) => (),
@@ -256,34 +249,32 @@ impl Connector {
             } else {
                 Err(KolaError::NotConnectedErr())
             }
-        } else {
-            if let Some(stream) = &mut self.stream {
-                let mut header = [0u8; 16];
-                match stream.read_exact(&mut header) {
-                    Ok(_) => (),
-                    Err(e) => {
-                        self.shutdown()?;
-                        return Err(KolaError::IOError(e));
-                    }
-                };
-                let encoding = header[0];
-                if encoding == 0 {
+        } else if let Some(stream) = &mut self.stream {
+            let mut header = [0u8; 16];
+            match stream.read_exact(&mut header) {
+                Ok(_) => (),
+                Err(e) => {
                     self.shutdown()?;
-                    return Err(KolaError::NotSupportedBigEndianErr());
+                    return Err(KolaError::IOError(e));
                 }
-                let length = u64::from_le_bytes(header[8..].try_into().unwrap()) as usize;
-                let mut vec: Vec<u8> = vec![0u8; length];
-                match stream.read_exact(&mut vec) {
-                    Ok(_) => (),
-                    Err(e) => {
-                        self.shutdown()?;
-                        return Err(KolaError::IOError(e));
-                    }
-                };
-                serde9::deserialize(&vec, &mut 0)
-            } else {
-                Err(KolaError::NotConnectedErr())
+            };
+            let encoding = header[0];
+            if encoding == 0 {
+                self.shutdown()?;
+                return Err(KolaError::NotSupportedBigEndianErr());
             }
+            let length = u64::from_le_bytes(header[8..].try_into().unwrap()) as usize;
+            let mut vec: Vec<u8> = vec![0u8; length];
+            match stream.read_exact(&mut vec) {
+                Ok(_) => (),
+                Err(e) => {
+                    self.shutdown()?;
+                    return Err(KolaError::IOError(e));
+                }
+            };
+            serde9::deserialize(&vec, &mut 0)
+        } else {
+            Err(KolaError::NotConnectedErr())
         }
     }
 
@@ -300,7 +291,7 @@ impl Connector {
             if !self.timeout.is_zero() {
                 tcp_stream
                     .set_read_timeout(Some(self.timeout))
-                    .map_err(|e| KolaError::IOError(e))?;
+                    .map_err(KolaError::IOError)?;
             }
 
             if self.enable_tls {
@@ -346,7 +337,7 @@ impl Connector {
         }
     }
 
-    pub fn execute(&mut self, expr: &str, args: &Vec<J>) -> Result<J, KolaError> {
+    pub fn execute(&mut self, expr: &str, args: &[J]) -> Result<J, KolaError> {
         if self.stream.is_none() {
             self.connect()?;
         };
@@ -354,7 +345,7 @@ impl Connector {
         self.receive()
     }
 
-    pub fn execute_async(&mut self, expr: &str, args: &Vec<J>) -> Result<(), KolaError> {
+    pub fn execute_async(&mut self, expr: &str, args: &[J]) -> Result<(), KolaError> {
         if self.stream.is_none() {
             self.connect()?;
         };

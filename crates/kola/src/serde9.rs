@@ -1,7 +1,4 @@
-use std::{
-    io::{Cursor, Write},
-    usize,
-};
+use std::io::{Cursor, Write};
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Timelike};
 use indexmap::IndexMap;
@@ -219,7 +216,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<J, KolaError> {
                 let array_vec = keys[8..4 * dict_len + 8].to_vec();
                 let (_, offsets, _) = unsafe { array_vec.align_to::<u32>() };
                 let keys_start = 4 * dict_len + 8;
-                let keys_end = 8 + k_len as usize;
+                let keys_end = 8 + k_len;
 
                 let keys = &keys[keys_start..keys_end];
                 *pos += keys_end + PADDING[keys_end % 8].len();
@@ -230,8 +227,8 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<J, KolaError> {
                 *pos += v_len + PADDING[v_len % 8].len();
                 let mut v_pos = 0;
                 let mut prev_offset = 0;
-                for i in 0..dict_len {
-                    let offset = offsets[i] as usize;
+                for offset in offsets.iter().take(dict_len) {
+                    let offset = *offset as usize;
                     dict.insert(
                         String::from_utf8(keys[prev_offset..offset].to_vec()).unwrap(),
                         deserialize(values, &mut v_pos)?,
@@ -249,12 +246,12 @@ pub fn deserialize(vec: &[u8], pos: &mut usize) -> Result<J, KolaError> {
 // pub fn serialize_err(err: &str) -> Vec<u8> {
 //     let len = err.len() + 24;
 //     let mut vec = Vec::with_capacity(len);
-//     vec.write(&[1, 2, 0, 0, 0, 0, 0, 0]).unwrap();
-//     vec.write(&(len as u64).to_le_bytes()).unwrap();
-//     vec.write(&[128, 0, 0, 0]).unwrap();
-//     vec.write(&(err.len() as u32).to_le_bytes()).unwrap();
-//     vec.write(err.as_bytes()).unwrap();
-//     vec.write(&PADDING[len % 8]).unwrap();
+//     vec.write_all(&[1, 2, 0, 0, 0, 0, 0, 0]).unwrap();
+//     vec.write_all(&(len as u64).to_le_bytes()).unwrap();
+//     vec.write_all(&[128, 0, 0, 0]).unwrap();
+//     vec.write_all(&(err.len() as u32).to_le_bytes()).unwrap();
+//     vec.write_all(err.as_bytes()).unwrap();
+//     vec.write_all(&PADDING[len % 8]).unwrap();
 //     vec
 // }
 
@@ -263,59 +260,59 @@ pub fn serialize(j: &J, compress: bool) -> Result<Vec<u8>, KolaError> {
     let code = j.get_j_type_code() as u8;
     let size = estimate_size(j, compress)?;
     let mut vec: Vec<u8> = Vec::with_capacity(size);
-    vec.write(&[code, 0, 0, 0]).unwrap();
+    vec.write_all(&[code, 0, 0, 0]).unwrap();
     match j {
         J::Boolean(v) => {
-            vec.write(&[(*v as u8), 0, 0, 0]).unwrap();
+            vec.write_all(&[(*v as u8), 0, 0, 0]).unwrap();
         }
         J::U8(v) => {
-            vec.write(&[*v, 0, 0, 0]).unwrap();
+            vec.write_all(&[*v, 0, 0, 0]).unwrap();
         }
         J::I16(v) => {
-            vec.write(&(*v as i32).to_le_bytes()).unwrap();
+            vec.write_all(&(*v as i32).to_le_bytes()).unwrap();
         }
         J::I32(v) => {
-            vec.write(&v.to_le_bytes()).unwrap();
+            vec.write_all(&v.to_le_bytes()).unwrap();
         }
         J::Date(v) => {
-            vec.write(&(v.num_days_from_ce() - 719163).to_le_bytes())
+            vec.write_all(&(v.num_days_from_ce() - 719163).to_le_bytes())
                 .unwrap();
         }
         J::I64(v) => {
-            vec.write(&[0, 0, 0, 0]).unwrap();
-            vec.write(&v.to_le_bytes()).unwrap();
+            vec.write_all(&[0, 0, 0, 0]).unwrap();
+            vec.write_all(&v.to_le_bytes()).unwrap();
         }
         J::Time(v) => {
-            vec.write(&[0, 0, 0, 0]).unwrap();
-            let ns = (v.num_seconds_from_midnight() as i64) * 1000_000_000 + v.nanosecond() as i64;
-            vec.write(&ns.to_le_bytes()).unwrap();
+            vec.write_all(&[0, 0, 0, 0]).unwrap();
+            let ns = (v.num_seconds_from_midnight() as i64) * 1_000_000_000 + v.nanosecond() as i64;
+            vec.write_all(&ns.to_le_bytes()).unwrap();
         }
         J::DateTime(v) => {
-            vec.write(&[0, 0, 0, 0]).unwrap();
-            vec.write(&v.timestamp_nanos_opt().unwrap().to_le_bytes())
+            vec.write_all(&[0, 0, 0, 0]).unwrap();
+            vec.write_all(&v.timestamp_nanos_opt().unwrap().to_le_bytes())
                 .unwrap();
         }
         J::Duration(v) => {
-            vec.write(&[0, 0, 0, 0]).unwrap();
-            vec.write(&v.num_nanoseconds().unwrap().to_le_bytes())
+            vec.write_all(&[0, 0, 0, 0]).unwrap();
+            vec.write_all(&v.num_nanoseconds().unwrap().to_le_bytes())
                 .unwrap();
         }
         J::F32(v) => {
-            vec.write(&v.to_le_bytes()).unwrap();
+            vec.write_all(&v.to_le_bytes()).unwrap();
         }
         J::F64(v) => {
-            vec.write(&[0, 0, 0, 0]).unwrap();
-            vec.write(&v.to_le_bytes()).unwrap();
+            vec.write_all(&[0, 0, 0, 0]).unwrap();
+            vec.write_all(&v.to_le_bytes()).unwrap();
         }
         J::Symbol(s) | J::String(s) => {
-            vec.write(&(s.len() as u32).to_le_bytes()).unwrap();
-            vec.write(s.as_bytes()).unwrap();
-            vec.write(&PADDING[s.len() % 8]).unwrap();
+            vec.write_all(&(s.len() as u32).to_le_bytes()).unwrap();
+            vec.write_all(s.as_bytes()).unwrap();
+            vec.write_all(PADDING[s.len() % 8]).unwrap();
         }
         J::Series(s) => {
             let mut df = s.clone().into_frame();
-            vec.write(&[0, 0, 0, 0]).unwrap();
-            vec.write(&0u64.to_le_bytes()).unwrap();
+            vec.write_all(&[0, 0, 0, 0]).unwrap();
+            vec.write_all(&0u64.to_le_bytes()).unwrap();
             let compression = if compress && s.estimated_size() > IPC_COMPRESS_THRESHOLD {
                 Some(IpcCompression::LZ4)
             } else {
@@ -329,43 +326,43 @@ pub fn serialize(j: &J, compress: bool) -> Result<Vec<u8>, KolaError> {
             for (i, u) in length.to_le_bytes().into_iter().enumerate() {
                 vec[i + 8] = u
             }
-            vec.write(&PADDING[length % 8]).unwrap();
+            vec.write_all(PADDING[length % 8]).unwrap();
         }
         J::MixedList(l) => {
             // length of list
-            vec.write(&(l.len() as u32).to_le_bytes()).unwrap();
-            if l.len() > 0 {
+            vec.write_all(&(l.len() as u32).to_le_bytes()).unwrap();
+            if !l.is_empty() {
                 let v = l
                     .iter()
                     .map(|j| serialize(j, compress))
                     .collect::<Result<Vec<Vec<u8>>, KolaError>>()?;
                 // length of list size
                 let length: usize = v.iter().map(|b| b.len()).sum();
-                vec.write(&(length as u64).to_le_bytes()).unwrap();
+                vec.write_all(&(length as u64).to_le_bytes()).unwrap();
                 v.into_iter().for_each(|b| {
-                    vec.write(&b).unwrap();
+                    vec.write_all(&b).unwrap();
                 });
             }
         }
         // K::Matrix(m) => {
         //     let length = m.len() * 8 + 8;
-        //     vec.write(&(length as u32).to_le_bytes()).unwrap();
-        //     vec.write(&(m.nrows() as u32).to_le_bytes()).unwrap();
-        //     vec.write(&(m.ncols() as u32).to_le_bytes()).unwrap();
+        //     vec.write_all(&(length as u32).to_le_bytes()).unwrap();
+        //     vec.write_all(&(m.nrows() as u32).to_le_bytes()).unwrap();
+        //     vec.write_all(&(m.ncols() as u32).to_le_bytes()).unwrap();
         //     let ptr = m.as_slice().unwrap();
         //     let ptr = ptr.as_ptr() as *const u8;
         //     let v8 = unsafe { core::slice::from_raw_parts(ptr, m.len() * 8) };
-        //     vec.write(v8).unwrap();
+        //     vec.write_all(v8).unwrap();
         // }
         J::Dict(d) => {
             let d_len = d.len();
-            vec.write(&(d_len as u32).to_le_bytes()).unwrap();
+            vec.write_all(&(d_len as u32).to_le_bytes()).unwrap();
             if d_len > 0 {
                 // reserve d byte len
-                vec.write(&0u64.to_le_bytes()).unwrap();
+                vec.write_all(&0u64.to_le_bytes()).unwrap();
 
                 // reserve keys byte len
-                vec.write(&0u64.to_le_bytes()).unwrap();
+                vec.write_all(&0u64.to_le_bytes()).unwrap();
                 let k_lengths = d.keys().map(|s| s.len() as u32).collect::<Vec<u32>>();
                 let mut offsets = vec![0u32; k_lengths.len()];
                 offsets[0] = k_lengths[0];
@@ -374,11 +371,11 @@ pub fn serialize(j: &J, compress: bool) -> Result<Vec<u8>, KolaError> {
                 }
                 let v8: &[u8] =
                     unsafe { std::slice::from_raw_parts(offsets.as_ptr().cast(), d_len * 4) };
-                vec.write(v8).unwrap();
+                vec.write_all(v8).unwrap();
                 d.keys().for_each(|s| {
-                    vec.write(s.as_bytes()).unwrap();
+                    vec.write_all(s.as_bytes()).unwrap();
                 });
-                vec.write(&PADDING[vec.len() % 8]).unwrap();
+                vec.write_all(PADDING[vec.len() % 8]).unwrap();
                 // fill keys byte len
                 for (i, u) in ((vec.len() - 24) as u64)
                     .to_le_bytes()
@@ -390,10 +387,10 @@ pub fn serialize(j: &J, compress: bool) -> Result<Vec<u8>, KolaError> {
                 // mark start of values
                 let v_start = vec.len();
                 // reserve values byte len
-                vec.write(&0u64.to_le_bytes()).unwrap();
+                vec.write_all(&0u64.to_le_bytes()).unwrap();
 
                 d.values().for_each(|v| {
-                    vec.write(&serialize(v, compress).unwrap()).unwrap();
+                    vec.write_all(&serialize(v, compress).unwrap()).unwrap();
                 });
                 let v_len = (vec.len() - v_start - 8) as u64;
                 // write v len
@@ -409,14 +406,14 @@ pub fn serialize(j: &J, compress: bool) -> Result<Vec<u8>, KolaError> {
             }
         }
         J::DataFrame(df) => {
-            vec.write(&[0, 0, 0, 0]).unwrap();
+            vec.write_all(&[0, 0, 0, 0]).unwrap();
             let compression = if compress && df.estimated_size() > IPC_COMPRESS_THRESHOLD {
                 Some(IpcCompression::LZ4)
             } else {
                 None
             };
             // reserve length
-            vec.write(&0u64.to_le_bytes()).unwrap();
+            vec.write_all(&0u64.to_le_bytes()).unwrap();
             IpcStreamWriter::new(&mut vec)
                 .with_compression(compression)
                 .finish(&mut df.clone())
@@ -425,12 +422,12 @@ pub fn serialize(j: &J, compress: bool) -> Result<Vec<u8>, KolaError> {
             for (i, u) in length.to_le_bytes().into_iter().enumerate() {
                 vec[i + 8] = u
             }
-            vec.write(&PADDING[length % 8]).unwrap();
+            vec.write_all(PADDING[length % 8]).unwrap();
         }
         J::Null => {
-            vec.write(&[0, 0, 0, 0]).unwrap();
+            vec.write_all(&[0, 0, 0, 0]).unwrap();
         }
-        _ => return Err(KolaError::NotAbleToSerializeErr(format!("{:?}", j))),
+        _ => return Err(KolaError::NotAbleToSerializeErr(format!("{j:?}"))),
     }
     Ok(vec)
 }
@@ -454,7 +451,7 @@ fn estimate_size(j: &J, compress: bool) -> Result<usize, KolaError> {
             } else {
                 1009
             };
-            Ok(1699 + (estimated_size * ratio / 1000) as usize)
+            Ok(1699 + (estimated_size * ratio / 1000))
         }
         // 4 bytes type code, 4 bytes length, list bytes, padding
         J::MixedList(l) => {
@@ -476,7 +473,7 @@ fn estimate_size(j: &J, compress: bool) -> Result<usize, KolaError> {
             // ? - padding to align by 8 bytes
             // 8 - length of values - v
             // v - values
-            if d.len() == 0 {
+            if d.is_empty() {
                 Ok(8)
             } else {
                 let mut length: usize = 40;
@@ -494,14 +491,11 @@ fn estimate_size(j: &J, compress: bool) -> Result<usize, KolaError> {
             } else {
                 1009
             };
-            Ok(1699 + (estimated_size * ratio / 1000) as usize)
+            Ok(1699 + (estimated_size * ratio / 1000))
         }
-        _ => {
-            return Err(KolaError::NotAbleToSerializeErr(format!(
-                "unable to calc len for k type {0:?}",
-                j
-            )))
-        }
+        _ => Err(KolaError::NotAbleToSerializeErr(format!(
+            "unable to calc len for k type {j:?}"
+        ))),
     }
 }
 
@@ -572,7 +566,7 @@ mod tests {
 
     #[test]
     fn serde_datetime() {
-        let j = J::DateTime(DateTime::from_timestamp_nanos(86399999_999_999));
+        let j = J::DateTime(DateTime::from_timestamp_nanos(86_399_999_999_999));
         let v8: &[u8] = &[247, 0, 0, 0, 0, 0, 0, 0, 255, 255, 78, 145, 148, 78, 0, 0];
         assert_eq!(serialize(&j, false).unwrap(), v8);
         assert_eq!(deserialize(v8, &mut 0).unwrap(), j);
