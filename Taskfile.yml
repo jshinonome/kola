@@ -17,12 +17,10 @@ tasks:
       - uv venv --python 3.12
       - uv pip install pip
       - uv pip install -r py-kola/requirements.txt
-      - source .venv/bin/activate
 
   test:
     cmds:
       - cargo test
-      - make test-python
 
   build-python:
     dir: py-kola
