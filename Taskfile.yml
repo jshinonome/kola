@@ -2,6 +2,10 @@
 
 version: "3"
 
+vars:
+  VERSION:
+    sh: grep "version" Cargo.toml | head -1 | cut -d'"' -f 2
+
 tasks:
   default:
     cmds:
@@ -35,3 +39,7 @@ tasks:
     dir: py-kola
     cmds:
       - pytest -vv
+
+  tag:
+    cmds:
+      - git tag {{.VERSION}} && git push origin tag {{.VERSION}}
