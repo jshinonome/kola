@@ -12,12 +12,12 @@ use crate::serde6;
 use crate::types::{MsgType, J};
 
 pub fn read_j6_binary_table(path: &str) -> Result<DataFrame, KolaError> {
-    let f = File::open(path).map_err(|e| KolaError::IOError(e))?;
+    let f = File::open(path).map_err(KolaError::IOError)?;
     let mut reader = BufReader::new(f);
     let mut buffer = Vec::new();
     reader
         .read_to_end(&mut buffer)
-        .map_err(|e| KolaError::IOError(e))?;
+        .map_err(KolaError::IOError)?;
     if buffer[0..8] == vec![107u8, 120, 122, 105, 112, 112, 101, 100] {
         buffer = unzip(&buffer)?;
     }
@@ -27,11 +27,11 @@ pub fn read_j6_binary_table(path: &str) -> Result<DataFrame, KolaError> {
     }
 }
 
-pub fn unzip(buf: &Vec<u8>) -> Result<Vec<u8>, KolaError> {
+pub fn unzip(buf: &[u8]) -> Result<Vec<u8>, KolaError> {
     let block_num = usize::from_le_bytes(buf[buf.len() - 8..].try_into().unwrap());
     let footer_index = buf.len() - (block_num + 5) * 8;
     match buf[footer_index + 4] {
-        4 => Ok(unzip_lz4(&buf, footer_index, block_num)),
+        4 => Ok(unzip_lz4(buf, footer_index, block_num)),
         _ => Err(KolaError::Err(format!(
             "Not supported compression algo - {0}",
             buf[footer_index + 4]
@@ -39,7 +39,7 @@ pub fn unzip(buf: &Vec<u8>) -> Result<Vec<u8>, KolaError> {
     }
 }
 
-pub fn unzip_lz4(buf: &Vec<u8>, footer_index: usize, block_num: usize) -> Vec<u8> {
+pub fn unzip_lz4(buf: &[u8], footer_index: usize, block_num: usize) -> Vec<u8> {
     let footer = &buf[footer_index..];
     // let compress_level = footer[5];
     let block_size = usize::from_le_bytes(footer[24..32].try_into().unwrap());
@@ -49,24 +49,26 @@ pub fn unzip_lz4(buf: &Vec<u8>, footer_index: usize, block_num: usize) -> Vec<u8
     let mut zipped_bytes: Vec<u8> = Vec::with_capacity(zipped_size);
     // magic word 0x04224D18
     // fix config 0x68
-    zipped_bytes.write(&[4u8, 34, 77, 24, 104]).unwrap();
+    zipped_bytes.write_all(&[4u8, 34, 77, 24, 104]).unwrap();
     // block size config 0x40 16, 0x50 18, 0x60 20, 0x70 22
     zipped_bytes
-        .write(&[((block_size.ilog2() / 2 - 4) * 16) as u8])
+        .write_all(&[((block_size.ilog2() / 2 - 4) * 16) as u8])
         .unwrap();
-    zipped_bytes.write(&footer[8..16]).unwrap();
+    zipped_bytes.write_all(&footer[8..16]).unwrap();
     let chuck_sum = xxh32::xxh32(&zipped_bytes[4..], 0).to_le_bytes();
-    zipped_bytes.write(&chuck_sum[1..2]).unwrap();
+    zipped_bytes.write_all(&chuck_sum[1..2]).unwrap();
     let mut block_start_index = 8;
     for i in 0..block_num {
         let size = u32::from_le_bytes(footer[32 + i * 8..36 + i * 8].try_into().unwrap()) as usize;
-        zipped_bytes.write(&footer[32 + i * 8..36 + i * 8]).unwrap();
         zipped_bytes
-            .write(&buf[block_start_index..block_start_index + size])
+            .write_all(&footer[32 + i * 8..36 + i * 8])
+            .unwrap();
+        zipped_bytes
+            .write_all(&buf[block_start_index..block_start_index + size])
             .unwrap();
         block_start_index += size;
     }
-    zipped_bytes.write(&[0, 0, 0, 0]).unwrap();
+    zipped_bytes.write_all(&[0, 0, 0, 0]).unwrap();
     let reader = Cursor::new(zipped_bytes);
     let mut rdr = FrameDecoder::new(reader);
     let mut unzipped_bytes: Vec<u8> = Vec::with_capacity(unzipped_size);
@@ -81,9 +83,9 @@ pub fn generate_j6_ipc_msg(
 ) -> Result<Vec<u8>, KolaError> {
     let length = k.len()?;
     let mut vec: Vec<u8> = Vec::with_capacity(length + 8);
-    vec.write(&[1, msg_type as u8, 0, 0]).unwrap();
-    vec.write(&(length as u32 + 8).to_le_bytes()).unwrap();
-    vec.write(&serde6::serialize(&k)?).unwrap();
+    vec.write_all(&[1, msg_type as u8, 0, 0]).unwrap();
+    vec.write_all(&(length as u32 + 8).to_le_bytes()).unwrap();
+    vec.write_all(&serde6::serialize(&k)?).unwrap();
     if enable_compression {
         Ok(serde6::compress(vec))
     } else {

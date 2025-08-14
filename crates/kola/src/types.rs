@@ -1,5 +1,3 @@
-use std::usize;
-
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use indexmap::IndexMap;
 use polars::{
@@ -76,7 +74,7 @@ impl J {
             J::DataFrame(df) => {
                 // 98 0 99 + symbol list(6) + values(6)
                 let mut length: usize = 15;
-                for column in df.get_columns().into_iter() {
+                for column in df.get_columns().iter() {
                     length += column.name().len() + 1;
                     length += get_series_len(column.as_materialized_series())?
                 }
@@ -176,7 +174,7 @@ impl TryFrom<J> for Series {
     fn try_from(other: J) -> Result<Self, Self::Error> {
         match other {
             J::Series(series) => Ok(series),
-            k => Err(KolaError::Err(format!("Not Series - {:?}", k))),
+            k => Err(KolaError::Err(format!("Not Series - {k:?}"))),
         }
     }
 }
@@ -187,7 +185,7 @@ impl TryFrom<J> for DataFrame {
     fn try_from(other: J) -> Result<Self, Self::Error> {
         match other {
             J::DataFrame(df) => Ok(df),
-            k => Err(KolaError::Err(format!("Not DataFrame - {:?}", k))),
+            k => Err(KolaError::Err(format!("Not DataFrame - {k:?}"))),
         }
     }
 }
@@ -266,9 +264,9 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
             if is_16_fixed_binary {
                 Ok(16 * length + 6)
             } else {
-                Err(KolaError::Err(format!(
-                    "Only support 16 fixed size binary as guid",
-                )))
+                Err(KolaError::Err(
+                    "Only support 16 fixed size binary as guid".to_string(),
+                ))
             }
         }
         // to symbol

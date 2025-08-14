@@ -184,7 +184,7 @@ impl KolaConnector {
     }
 
     pub fn receive(&mut self, py: Python) -> PyResult<PyObject> {
-        let k = py.allow_threads(move || self.q.receive().map_err(|e| PyKolaError::from(e)));
+        let k = py.allow_threads(move || self.q.receive().map_err(PyKolaError::from));
         cast_k_to_py(py, k?)
     }
 }
@@ -266,7 +266,7 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<J> {
 pub fn read_j6_binary_table(filepath: &str) -> PyResult<PyDataFrame> {
     kola::io::read_j6_binary_table(filepath)
         .map_err(|e| PyKolaError::from(e).into())
-        .map(|df| PyDataFrame(df))
+        .map(PyDataFrame)
 }
 
 #[pyfunction]
