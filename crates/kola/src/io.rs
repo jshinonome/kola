@@ -81,7 +81,7 @@ pub fn generate_j6_ipc_msg(
     enable_compression: bool,
     k: J,
 ) -> Result<Vec<u8>, KolaError> {
-    let length = k.len()?;
+    let length = k.j6_len()?;
     let mut vec: Vec<u8> = Vec::with_capacity(length + 8);
     vec.write_all(&[1, msg_type as u8, 0, 0]).unwrap();
     vec.write_all(&(length as u32 + 8).to_le_bytes()).unwrap();

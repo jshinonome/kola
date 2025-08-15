@@ -1061,7 +1061,7 @@ pub fn compress(vec: Vec<u8>) -> Vec<u8> {
 }
 
 pub fn serialize(k: &J) -> Result<Vec<u8>, KolaError> {
-    let k_length = k.len()?;
+    let k_length = k.j6_len()?;
     let mut vec: Vec<u8>;
     match k {
         J::Boolean(k) => {

@@ -45,7 +45,7 @@ pub enum J {
 }
 
 impl J {
-    pub fn len(&self) -> Result<usize, KolaError> {
+    pub fn j6_len(&self) -> Result<usize, KolaError> {
         // k type + value
         match self {
             J::Boolean(_) => Ok(2),
@@ -66,7 +66,7 @@ impl J {
             J::MixedList(l) => {
                 let lens = l
                     .iter()
-                    .map(|k| k.len())
+                    .map(|k| k.j6_len())
                     .collect::<Result<Vec<_>, KolaError>>();
                 Ok(lens?.into_iter().sum::<usize>() + 6)
             }
@@ -85,7 +85,7 @@ impl J {
                 let mut length = 13;
                 for (k, v) in dict.iter() {
                     length += k.len() + 1;
-                    length += v.len()?;
+                    length += v.j6_len()?;
                 }
                 Ok(length)
             }
