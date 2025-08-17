@@ -1,4 +1,4 @@
-[![Kola Python Linux](https://github.com/jshinonome/kola/actions/workflows/release-python-linux.yml/badge.svg)](https://github.com/jshinonome/kola/actions/workflows/release-python-linux.yml)
+[![Kola CI](https://github.com/jshinonome/kola/actions/workflows/CI.yml/badge.svg)](https://github.com/jshinonome/kola/actions/workflows/CI.yml)
 
 ## kola
 
