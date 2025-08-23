@@ -2,7 +2,6 @@ import logging
 import math
 from datetime import date, datetime, time, timedelta, timezone
 
-import polars as pl
 import pytest
 
 from kola import J, KolaError, KolaIOError
