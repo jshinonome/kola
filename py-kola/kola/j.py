@@ -17,11 +17,11 @@ class J(object):
         self,
         host: str,
         port: int,
-        user="",
-        passwd="",
-        enable_tls=False,
-        retries=0,
-        timeout=0,
+        user: str = "",
+        passwd: str = "",
+        enable_tls: bool = False,
+        retries: int = 0,
+        timeout: int = 0,
     ):
         if not user:
             try:
