@@ -22,16 +22,11 @@ tasks:
     cmds:
       - cargo test
 
-  build-python:
-    dir: py-kola
+  install-python:
+    deps:
+      - release-python
     cmds:
-      - maturin develop --strip
-
-  release-python:
-    dir: py-kola
-    cmds:
-      - maturin build --release
-      - uv pip install ../target/wheels/*
+      - uv pip install target/wheels/*
 
   test-python:
     dir: py-kola
@@ -41,3 +36,34 @@ tasks:
   tag:
     cmds:
       - git tag {{.VERSION}} && git push origin tag {{.VERSION}}
+
+  podman-release:
+    cmds:
+      - podman run -it --rm -v $PWD:/build:Z -v $HOME/.cargo:$HOME/.cargo:Z manylinux2014 /bin/bash -i -c "task release-python"
+
+  podman-build:
+    cmds:
+      - podman run -it --rm -v $PWD:/build:Z -v $HOME/.cargo:$HOME/.cargo:Z manylinux2014 /bin/bash -i -c "task build-python"
+
+  build-python:
+    cmds:
+      - |
+        ln -s /usr/include/x86_64-linux-gnu/openssl/opensslconf.h /usr/include/openssl/opensslconf.h
+        ln -s /usr/include/x86_64-linux-gnu/openssl/configuration.h /usr/include/openssl/configuration.h
+        export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+        export OPENSSL_INCLUDE_DIR=/usr/include
+        python3.12 -m venv .venv
+        pip3.12 install -r py-kola/requirements.txt
+        export RUSTFLAGS="-C target-feature=+sse3,+ssse3,+sse4.1,+sse4.2,+popcnt,+avx,+avx2,+fma,+bmi1,+bmi2,+lzcnt"
+        maturin develop --strip --manifest-path py-kola/Cargo.toml
+
+  release-python:
+    cmds:
+      - |
+        ln -s /usr/include/x86_64-linux-gnu/openssl/opensslconf.h /usr/include/openssl/opensslconf.h
+        ln -s /usr/include/x86_64-linux-gnu/openssl/configuration.h /usr/include/openssl/configuration.h
+        export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+        export OPENSSL_INCLUDE_DIR=/usr/include
+        pip3.12 install -r py-kola/requirements.txt
+        export RUSTFLAGS="-C target-feature=+sse3,+ssse3,+sse4.1,+sse4.2,+popcnt,+avx,+avx2,+fma,+bmi1,+bmi2,+lzcnt"
+        maturin build --release --out dist -i python3.12 --manifest-path py-kola/Cargo.toml

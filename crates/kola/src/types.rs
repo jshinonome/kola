@@ -117,8 +117,8 @@ impl J {
                 )
                 .unwrap(),
             ),
-            AnyValue::Categorical(i, g, _) => {
-                let sym = g.get(i);
+            AnyValue::Categorical(i, g) => {
+                let sym = g.cat_to_str(i).unwrap_or("");
                 J::Symbol(sym.to_owned())
             }
             AnyValue::List(s) => J::Series(s),
@@ -271,7 +271,7 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
         }
         // to symbol
         PolarsDataType::Categorical(_, _) => {
-            let cat = series.categorical().unwrap();
+            let cat = series.cat32().unwrap();
             let mut length: usize = 6;
             for s in cat.iter_str() {
                 length += s.unwrap_or("").len() + 1;

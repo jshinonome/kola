@@ -100,9 +100,9 @@ pub fn deserialize_j6(buf: &[u8]) -> Result<J, KolaError> {
 #[cfg(test)]
 mod tests {
     use polars::{
-        datatypes::{CategoricalOrdering, DataType},
+        datatypes::DataType,
         frame::DataFrame,
-        prelude::NamedFrom,
+        prelude::{Categories, NamedFrom},
         series::Series,
     };
     use polars_arrow::array::Utf8Array;
@@ -135,7 +135,10 @@ mod tests {
             Utf8Array::<i64>::from([Some("a"), Some("b")]).boxed(),
         )
         .unwrap()
-        .cast(&DataType::Categorical(None, CategoricalOrdering::Lexical))
+        .cast(&DataType::Categorical(
+            Categories::global(),
+            Categories::global().mapping(),
+        ))
         .unwrap();
         let qty = Series::new("qty".into(), [1i64, 1].as_ref());
         let price = Series::new("price".into(), [1.0f64, 1.0].as_ref());

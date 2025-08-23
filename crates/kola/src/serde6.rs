@@ -1,10 +1,8 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Timelike, Utc};
 use indexmap::IndexMap;
 use polars::chunked_array::ops::ChunkFillNullValue;
-use polars::datatypes::{
-    CategoricalOrdering, DataType as PolarsDataType, TimeUnit as PolarTimeUnit,
-};
-use polars::prelude::DataFrame;
+use polars::datatypes::{DataType as PolarsDataType, TimeUnit as PolarTimeUnit};
+use polars::prelude::{Categories, DataFrame};
 use polars::series::{IntoSeries, Series};
 use polars_arrow::array::{
     Array, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array,
@@ -256,14 +254,14 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                 match values {
                     J::Series(s) => {
                         let mut dict = IndexMap::with_capacity(keys.len());
-                        for (k, v) in keys.categorical().unwrap().iter_str().zip(s.iter()) {
+                        for (k, v) in keys.cat32().unwrap().iter_str().zip(s.iter()) {
                             dict.insert(k.unwrap().to_string(), J::from_any_value(v));
                         }
                         Ok(J::Dict(dict))
                     }
                     J::MixedList(l) => {
                         let mut dict = IndexMap::with_capacity(keys.len());
-                        for (k, v) in keys.categorical().unwrap().iter_str().zip(l.into_iter()) {
+                        for (k, v) in keys.cat32().unwrap().iter_str().zip(l.into_iter()) {
                             dict.insert(k.unwrap().to_string(), v);
                         }
                         Ok(J::Dict(dict))
@@ -589,8 +587,8 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             if as_column {
                 series = series
                     .cast(&PolarsDataType::Categorical(
-                        None,
-                        CategoricalOrdering::Lexical,
+                        Categories::global(),
+                        Categories::global().mapping(),
                     ))
                     .unwrap();
             }
@@ -726,7 +724,7 @@ fn new_empty_series(k_type: u8) -> Result<J, KolaError> {
         9 => Series::new_empty(name.into(), &PolarsDataType::Float64),
         11 => Series::new_empty(
             name.into(),
-            &PolarsDataType::Categorical(None, CategoricalOrdering::Lexical),
+            &PolarsDataType::Categorical(Categories::global(), Categories::global().mapping()),
         ),
         12 | 15 => Series::new_empty(
             name.into(),
@@ -802,7 +800,8 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<J, KolaError> {
         let series = Series::from_arrow(name.into(), list_array.boxed()).unwrap();
         let series = series
             .cast(&PolarsDataType::List(
-                PolarsDataType::Categorical(None, CategoricalOrdering::Lexical).boxed(),
+                PolarsDataType::Categorical(Categories::global(), Categories::global().mapping())
+                    .boxed(),
             ))
             .unwrap();
         return Ok(J::Series(series));
@@ -1471,20 +1470,14 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             k_size = 8;
             vec.write_all(&[12, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let new_series: Series;
-            let ptr = if series.null_count() > 0 {
-                new_series = series
-                    .datetime()
-                    .unwrap()
-                    .fill_null_with_values(i64::MIN)
-                    .unwrap()
-                    .into_series();
-                new_series.to_physical_repr()
+            let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
+            let chunks = chunks.i64().unwrap();
+            let chunks = if chunks.null_count() > 0 {
+                chunks.fill_null_with_values(i64::MIN).unwrap()
             } else {
-                series.to_physical_repr()
+                chunks.clone()
             };
-            let chunks = &ptr.i64().unwrap().chunks();
-            chunks.iter().for_each(|array| {
+            chunks.chunks().iter().for_each(|array| {
                 let buffer = unsafe {
                     array
                         .as_any()
@@ -1518,20 +1511,14 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             k_size = 8;
             vec.write_all(&[16, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let new_series: Series;
-            let ptr = if series.null_count() > 0 {
-                new_series = series
-                    .duration()
-                    .unwrap()
-                    .fill_null_with_values(i64::MIN)
-                    .unwrap()
-                    .into_series();
-                new_series.to_physical_repr()
+            let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
+            let chunks = chunks.i64().unwrap();
+            let chunks = if chunks.null_count() > 0 {
+                chunks.fill_null_with_values(i64::MIN).unwrap()
             } else {
-                series.to_physical_repr()
+                chunks.clone()
             };
-            let chunks = &ptr.i64().unwrap().chunks();
-            chunks.iter().for_each(|array| {
+            chunks.chunks().iter().for_each(|array| {
                 let array = unsafe {
                     array
                         .as_any()
@@ -1549,20 +1536,14 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             k_size = 4;
             vec.write_all(&[19, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let new_series: Series;
-            let ptr = if series.null_count() > 0 {
-                new_series = series
-                    .time()
-                    .unwrap()
-                    .fill_null_with_values(i64::MIN)
-                    .unwrap()
-                    .into_series();
-                new_series.to_physical_repr()
+            let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
+            let chunks = chunks.i64().unwrap();
+            let chunks = if chunks.null_count() > 0 {
+                chunks.fill_null_with_values(i64::MIN).unwrap()
             } else {
-                series.to_physical_repr()
+                chunks.clone()
             };
-            let chunks = &ptr.i64().unwrap().chunks();
-            chunks.iter().for_each(|array| {
+            chunks.chunks().iter().for_each(|array| {
                 let buffer = unsafe {
                     array
                         .as_any()
@@ -1835,7 +1816,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
         PolarsDataType::Categorical(_, _) => {
             vec.write_all(&[11, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let cat = series.categorical().unwrap();
+            let cat = series.cat32().unwrap();
             cat.iter_str()
                 .map(|s| {
                     if let Some(s) = s {
@@ -1877,10 +1858,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
 #[cfg(test)]
 mod tests {
     use indexmap::IndexMap;
-    use polars::{
-        datatypes::CategoricalOrdering,
-        prelude::{CompatLevel, NamedFrom},
-    };
+    use polars::prelude::{CompatLevel, NamedFrom};
     use polars_arrow::{
         array::{BooleanArray, UInt8Array},
         offset::OffsetsBuffer,
@@ -2102,8 +2080,8 @@ mod tests {
         let series: Series = k.try_into().unwrap();
         let expect = expect
             .cast(&PolarsDataType::Categorical(
-                None,
-                CategoricalOrdering::Lexical,
+                Categories::global(),
+                Categories::global().mapping(),
             ))
             .unwrap();
         assert_eq!(
