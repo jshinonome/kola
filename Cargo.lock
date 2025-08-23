@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "kola"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "indexmap",
@@ -2100,7 +2100,7 @@ dependencies = [
 
 [[package]]
 name = "py-kola"
-version = "2.0.1"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "indexmap",
