@@ -498,7 +498,8 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             let array_vec = array_vec.to_vec();
             let new_ptr: *const i16 = array_vec.as_ptr().cast();
             let slice = unsafe { core::slice::from_raw_parts(new_ptr, array_vec.len() / k_size) };
-            let bitmap = Bitmap::from_iter(slice.iter().map(|s| *s != i16::MIN));
+            let bitmap =
+                Bitmap::from_iter(slice.iter().map(|s| *s > i16::MIN + 1 && *s < i16::MAX));
             let mut array = Int16Array::from_slice(slice);
             array.set_validity(Some(bitmap));
             series = Series::from_arrow(name.into(), array.boxed()).unwrap();
@@ -1964,11 +1965,12 @@ mod tests {
         let name = K_TYPE_NAME[vec[0] as usize];
         let expect = Series::from_arrow(
             name.into(),
-            Int16Array::from([None, Some(i16::MIN + 1), Some(0), Some(i16::MAX)]).boxed(),
+            Int16Array::from([None, None, Some(0), None]).boxed(),
         )
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
+        let vec = [5, 0, 4, 0, 0, 0, 0, 128, 0, 128, 0, 0, 0, 128].to_vec();
         assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
     }
 
