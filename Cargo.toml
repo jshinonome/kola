@@ -22,7 +22,7 @@ panic = "abort"
 
 [workspace.dependencies.polars-arrow]
 default-features = false
-version = "0.50.0"
+version = "0.51.0"
 
 [workspace.dependencies.polars]
-version = "0.50.0"
+version = "0.51.0"

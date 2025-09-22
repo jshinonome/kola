@@ -2,7 +2,7 @@ import contextlib
 from typing import Any, Literal
 
 with contextlib.suppress(ImportError):  # Module not available when building docs
-    from kola.kola import deserialize, generate_j6_ipc_msg, read_j6_binary_table
+    from kola.kola import generate_j6_ipc_msg, read_j6_binary_table
 
 
 def read_binary6(filepath: str) -> Any:
@@ -23,8 +23,4 @@ def serialize_as_ipc_bytes6(
     )
 
 
-def deserialize_bytes6(buf: bytes) -> Any:
-    return deserialize(buf)
-
-
-__all__ = [read_binary6, serialize_as_ipc_bytes6, deserialize_bytes6]
+__all__ = [read_binary6, serialize_as_ipc_bytes6]

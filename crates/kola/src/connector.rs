@@ -5,7 +5,7 @@ use crate::types::{MsgType, J};
 use native_tls::TlsConnector;
 use std::error::Error;
 use std::io::{self, Read as IoRead, Write as IoWrite};
-use std::net::{Shutdown, TcpStream};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 pub(crate) trait QStream: IoRead + IoWrite {
     fn shutdown(&self, how: Shutdown) -> io::Result<()>;
@@ -283,15 +283,30 @@ impl Connector {
             Ok(())
         } else {
             let socket = format!("{}:{}", &self.host, self.port);
-            let mut tcp_stream = match TcpStream::connect(&socket) {
-                Ok(stream) => stream,
-                Err(e) => return Err(KolaError::IOError(e)),
+            let mut tcp_stream = if self.timeout.is_zero() {
+                match TcpStream::connect(&socket) {
+                    Ok(stream) => stream,
+                    Err(e) => return Err(KolaError::IOError(e)),
+                }
+            } else {
+                let addr = socket.to_socket_addrs().map_err(KolaError::IOError)?.next();
+                if addr.is_none() {
+                    return Err(KolaError::FailedToConnectErr(format!(
+                        "Failed to connect to {}",
+                        socket
+                    )));
+                }
+                match TcpStream::connect_timeout(&addr.unwrap(), self.timeout) {
+                    Ok(stream) => stream,
+                    Err(e) => return Err(KolaError::IOError(e)),
+                }
             };
             tcp_stream.set_nodelay(true)?;
             if !self.timeout.is_zero() {
                 tcp_stream
                     .set_read_timeout(Some(self.timeout))
                     .map_err(KolaError::IOError)?;
+                tcp_stream.set_write_timeout(Some(self.timeout))?;
             }
 
             if self.enable_tls {
