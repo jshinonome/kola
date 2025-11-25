@@ -4,7 +4,7 @@ use crate::error::PyKolaError::{self, PythonErr};
 use chrono::{Datelike, Timelike};
 use indexmap::IndexMap;
 use kola::connector::Connector;
-use kola::types::{MsgType, J};
+use kola::types::{MsgType, K};
 use pyo3::types::{
     PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList, PyString, PyTime,
     PyTuple, PyTzInfo,
@@ -64,20 +64,20 @@ impl KolaConnector {
     }
 }
 
-fn cast_k_to_py(py: Python, k: J) -> PyResult<PyObject> {
+fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
     match k {
-        J::Boolean(k) => k.into_py_any(py),
-        J::Guid(k) => k.to_string().into_py_any(py),
-        J::U8(k) => k.into_py_any(py),
-        J::I16(k) => k.into_py_any(py),
-        J::I32(k) => k.into_py_any(py),
-        J::I64(k) => k.into_py_any(py),
-        J::F32(k) => k.into_py_any(py),
-        J::F64(k) => k.into_py_any(py),
-        J::Char(k) => (k as char).into_py_any(py),
-        J::Symbol(k) => k.into_py_any(py),
-        J::String(k) => k.into_py_any(py),
-        J::DateTime(k) => {
+        K::Boolean(k) => k.into_py_any(py),
+        K::Guid(k) => k.to_string().into_py_any(py),
+        K::U8(k) => k.into_py_any(py),
+        K::I16(k) => k.into_py_any(py),
+        K::I32(k) => k.into_py_any(py),
+        K::I64(k) => k.into_py_any(py),
+        K::F32(k) => k.into_py_any(py),
+        K::F64(k) => k.into_py_any(py),
+        K::Char(k) => (k as char).into_py_any(py),
+        K::Symbol(k) => k.into_py_any(py),
+        K::String(k) => k.into_py_any(py),
+        K::DateTime(k) => {
             if let Some(ns) = k.timestamp_nanos_opt() {
                 let datetime = PyDateTime::from_timestamp(
                     py,
@@ -89,14 +89,14 @@ fn cast_k_to_py(py: Python, k: J) -> PyResult<PyObject> {
                 Err(PythonErr("failed to get nanoseconds".to_string()).into())
             }
         }
-        J::Date(k) => {
+        K::Date(k) => {
             let mut days = k.num_days_from_ce() as i64 - 719163;
             days = min(days, 2932532);
             days = max(days, -719162);
             let date = PyDate::from_timestamp(py, 86400 * days)?;
             date.into_py_any(py)
         }
-        J::Time(k) => {
+        K::Time(k) => {
             let time = PyTime::new(
                 py,
                 k.hour() as u8,
@@ -107,7 +107,7 @@ fn cast_k_to_py(py: Python, k: J) -> PyResult<PyObject> {
             )?;
             time.into_py_any(py)
         }
-        J::Duration(k) => {
+        K::Duration(k) => {
             let delta = PyDelta::new(
                 py,
                 0,
@@ -117,17 +117,17 @@ fn cast_k_to_py(py: Python, k: J) -> PyResult<PyObject> {
             )?;
             delta.into_py_any(py)
         }
-        J::MixedList(l) => {
+        K::MixedList(l) => {
             let py_objects = l
                 .into_iter()
                 .map(|k| cast_k_to_py(py, k))
                 .collect::<PyResult<Vec<PyObject>>>()?;
             PyTuple::new(py, py_objects).unwrap().into_py_any(py)
         }
-        J::Series(k) => PySeries(k).into_py_any(py),
-        J::DataFrame(k) => PyDataFrame(k).into_py_any(py),
-        J::Null => ().into_py_any(py),
-        J::Dict(dict) => {
+        K::Series(k) => PySeries(k).into_py_any(py),
+        K::DataFrame(k) => PyDataFrame(k).into_py_any(py),
+        K::Null => ().into_py_any(py),
+        K::Dict(dict) => {
             let py_dict = PyDict::new(py);
             for (k, v) in dict.into_iter() {
                 py_dict.set_item(k, cast_k_to_py(py, v)?)?;
@@ -189,51 +189,51 @@ impl KolaConnector {
     }
 }
 
-fn cast_to_k_vec(tuple: Bound<PyTuple>) -> Result<Vec<J>, PyKolaError> {
-    let mut vec: Vec<J> = Vec::with_capacity(tuple.len());
+fn cast_to_k_vec(tuple: Bound<PyTuple>) -> Result<Vec<K>, PyKolaError> {
+    let mut vec: Vec<K> = Vec::with_capacity(tuple.len());
     for obj in tuple.into_iter() {
         vec.push(cast_to_k(obj).map_err(|e| PythonErr(e.to_string()))?)
     }
     Ok(vec)
 }
 
-fn cast_to_k(any: Bound<PyAny>) -> PyResult<J> {
+fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
     if any.is_instance_of::<PyBool>() {
-        Ok(J::Boolean(any.extract::<bool>()?))
+        Ok(K::Boolean(any.extract::<bool>()?))
         // TODO: this heap allocs on failure
     } else if any.is_instance_of::<PyInt>() {
         match any.extract::<i64>() {
-            Ok(v) => Ok(J::I64(v)),
+            Ok(v) => Ok(K::I64(v)),
             Err(e) => Err(e),
         }
     } else if any.is_instance_of::<PyFloat>() {
-        Ok(J::F64(any.extract::<f64>()?))
+        Ok(K::F64(any.extract::<f64>()?))
     } else if any.is_instance_of::<PyString>() {
         let value = any.extract::<&str>()?;
-        Ok(J::Symbol(value.to_string()))
+        Ok(K::Symbol(value.to_string()))
     } else if any.is_instance_of::<PyBytes>() {
         let value = any.downcast::<PyBytes>()?;
-        Ok(J::String(String::from_utf8(value.as_bytes().to_vec())?))
+        Ok(K::String(String::from_utf8(value.as_bytes().to_vec())?))
     } else if any.hasattr(intern!(any.py(), "_s"))? {
         let series = any.extract::<PySeries>()?.into();
-        Ok(J::Series(series))
+        Ok(K::Series(series))
     } else if any.hasattr(intern!(any.py(), "_df"))? {
         let df = any.extract::<PyDataFrame>()?.into();
-        Ok(J::DataFrame(df))
+        Ok(K::DataFrame(df))
     } else if any.is_none() {
-        Ok(J::Null)
+        Ok(K::Null)
     } else if any.is_instance_of::<PyDateTime>() {
         let py_datetime = any.downcast::<PyDateTime>()?;
-        Ok(J::DateTime(py_datetime.extract()?))
+        Ok(K::DateTime(py_datetime.extract()?))
     } else if any.is_instance_of::<PyDate>() {
         let py_date = any.downcast::<PyDate>()?;
-        Ok(J::Date(py_date.extract()?))
+        Ok(K::Date(py_date.extract()?))
     } else if any.is_instance_of::<PyTime>() {
         let py_time = any.downcast::<PyTime>()?;
-        Ok(J::Time(py_time.extract()?))
+        Ok(K::Time(py_time.extract()?))
     } else if any.is_instance_of::<PyDelta>() {
         let py_delta = any.downcast::<PyDelta>()?;
-        Ok(J::Duration(py_delta.extract()?))
+        Ok(K::Duration(py_delta.extract()?))
     } else if any.is_instance_of::<PyDict>() {
         let py_dict = any.downcast::<PyDict>()?;
         let mut dict = IndexMap::with_capacity(py_dict.len());
@@ -249,14 +249,14 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<J> {
             let v = cast_to_k(v)?;
             dict.insert(k, v);
         }
-        Ok(J::Dict(dict))
+        Ok(K::Dict(dict))
     } else if any.is_instance_of::<PyList>() {
         let py_list = any.downcast::<PyList>()?;
         let mut k_list = Vec::with_capacity(py_list.len());
         for py_any in py_list {
             k_list.push(cast_to_k(py_any)?);
         }
-        Ok(J::MixedList(k_list))
+        Ok(K::MixedList(k_list))
     } else {
         Err(PythonErr(format!("Not supported python type {:?}", any.get_type(),)).into())
     }

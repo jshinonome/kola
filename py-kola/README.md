@@ -1,66 +1,8 @@
 # kola
 
-a Python [Polars](https://pola-rs.github.io/polars/) Interface to `j*` and `q`
+a Python [Polars](https://pola-rs.github.io/polars/) Interface to `q`
 
 ## Basic Data Type Map
-
-### j\*
-
-#### Deserialization
-
-##### Atom
-
-| j type      | n   | size | python type | note                        |
-| ----------- | --- | ---- | ----------- | --------------------------- |
-| `boolean`   | 1   | 1    | `bool`      |                             |
-| `u8`        | 4   | 1    | `int`       |                             |
-| `i16`       | 5   | 2    | `int`       |                             |
-| `i32`       | 6   | 4    | `int`       |                             |
-| `i64`       | 7   | 8    | `int`       |                             |
-| `f32`       | 8   | 4    | `float`     |                             |
-| `f64`       | 9   | 8    | `float`     |                             |
-| `string`    | 10  | 1    | `str`       |                             |
-| `symbol`    | 11  | \*   | `str`       |                             |
-| `timestamp` | 12  | 8    | `datetime`  |                             |
-| `date`      | 14  | 4    | `date`      | 0001.01.01 - 9999.12.31     |
-| `datetime`  | 15  | 8    | `datetime`  |                             |
-| `duration`  | 16  | 8    | `timedelta` |                             |
-| `time`      | 19  | 4    | `time`      | 00:00:00.000 - 23:59:59.999 |
-
-##### Composite Data Type
-
-| k type       | n    | size | python type    |
-| ------------ | ---- | ---- | -------------- |
-| `series`     | 1-15 | -    | `pl.Series`    |
-| `list`       | 90   | -    | `Tuple`        |
-| `dictionary` | 91   | \*   | `dict`         |
-| `dataframe`  | 92   | \*   | `pl.DataFrame` |
-
-#### Serialization
-
-##### Basic Data Type
-
-| python type | j type     | note                        |
-| ----------- | ---------- | --------------------------- |
-| `bool`      | `boolean`  |                             |
-| `int`       | `i64`      |                             |
-| `float`     | `f64`      |                             |
-| `str`       | `symbol`   |                             |
-| `bytes`     | `string`   |                             |
-| `date`      | `date`     | 0001.01.01 - 9999.12.31     |
-| `datetime`  | `datetime` |                             |
-| `timedelta` | `duration` |                             |
-| `time`      | `time`     | 00:00:00.000 - 23:59:59.999 |
-
-##### Dictionary, Series and DataFrame
-
-| python type    | j type    |
-| -------------- | --------- |
-| `dict`         | dict      |
-| `pl.Series`    | series    |
-| `pl.DataFrame` | dataframe |
-
-> for dictionary, requires `string` as keys.
 
 ### q
 
@@ -177,17 +119,9 @@ df.with_columns([
 ```python
 import polars as pl
 import kola
-# Connect to j*, J and Q both work with j*
-conn = kola.J('localhost', 1800)
-
 # Connect to q
 conn = kola.Q('localhost', 1800)
 
-# with retries for IO Errors, 1s, 2s, 4s ...
-conn = kola.J('localhost', 1800, retries=3)
-
-# with read timeout error, 2s, "Resource temporarily unavailable"
-conn = kola.J('localhost', 1800, retries=3, timeout=2)
 ```
 
 ### Connect(Optional)

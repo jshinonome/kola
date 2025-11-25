@@ -57,9 +57,6 @@ pub enum KolaError {
     #[error("Not supported big endian.")]
     NotSupportedBigEndianErr(),
 
-    #[error("Not able to deserialize j type {0:?}.")]
-    NotAbleDeserializeJTypeErr(u8),
-
     #[error("Not able to serialize {0:?}.")]
     NotAbleToSerializeErr(String),
 

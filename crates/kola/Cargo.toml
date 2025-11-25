@@ -3,7 +3,7 @@ name = "kola"
 version.workspace = true
 edition = "2021"
 license = "BSD-3-Clause"
-description = "a Rust library to interface to j* and q"
+description = "a Rust library to interface to q"
 
 [lib]
 name = "kola"

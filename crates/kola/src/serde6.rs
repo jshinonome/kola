@@ -51,10 +51,10 @@ const K_TYPE_NAME: [&str; 20] = [
 use crate::types::get_series_len;
 use crate::{
     errors::KolaError,
-    types::{J, K_TYPE_SIZE},
+    types::{K, K_TYPE_SIZE},
 };
 
-pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, KolaError> {
+pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, KolaError> {
     let k_type = vec[*pos];
     *pos += 1;
     let start_pos = *pos;
@@ -62,51 +62,51 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
         237..=255 => match k_type {
             255 => {
                 *pos += 1;
-                Ok(J::Boolean(vec[start_pos] == 1))
+                Ok(K::Boolean(vec[start_pos] == 1))
             }
             254 => {
                 *pos += 16;
-                Ok(J::Guid(Uuid::from_bytes(
+                Ok(K::Guid(Uuid::from_bytes(
                     vec[start_pos..start_pos + 16].try_into().unwrap(),
                 )))
             }
             252 => {
                 *pos += 1;
-                Ok(J::U8(vec[start_pos]))
+                Ok(K::U8(vec[start_pos]))
             }
             251 => {
                 *pos += 2;
-                Ok(J::I16(i16::from_le_bytes(
+                Ok(K::I16(i16::from_le_bytes(
                     vec[start_pos..start_pos + 2].try_into().unwrap(),
                 )))
             }
             250 => {
                 *pos += 4;
-                Ok(J::I32(i32::from_le_bytes(
+                Ok(K::I32(i32::from_le_bytes(
                     vec[start_pos..start_pos + 4].try_into().unwrap(),
                 )))
             }
             249 => {
                 *pos += 8;
-                Ok(J::I64(i64::from_le_bytes(
+                Ok(K::I64(i64::from_le_bytes(
                     vec[start_pos..start_pos + 8].try_into().unwrap(),
                 )))
             }
             248 => {
                 *pos += 4;
-                Ok(J::F32(f32::from_le_bytes(
+                Ok(K::F32(f32::from_le_bytes(
                     vec[start_pos..start_pos + 4].try_into().unwrap(),
                 )))
             }
             247 => {
                 *pos += 8;
-                Ok(J::F64(f64::from_le_bytes(
+                Ok(K::F64(f64::from_le_bytes(
                     vec[start_pos..start_pos + 8].try_into().unwrap(),
                 )))
             }
             246 => {
                 *pos += 1;
-                Ok(J::Char(vec[start_pos]))
+                Ok(K::Char(vec[start_pos]))
             }
             245 => {
                 let mut eod_pos = *pos;
@@ -114,7 +114,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                     eod_pos += 1;
                 }
                 *pos = eod_pos + 1;
-                Ok(J::Symbol(
+                Ok(K::Symbol(
                     String::from_utf8(vec[start_pos..eod_pos].to_vec()).unwrap(),
                 ))
             }
@@ -123,7 +123,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                 let ns = i64::from_le_bytes(vec[*pos..*pos + 8].try_into().unwrap())
                     .saturating_add(NANOS_DIFF);
                 *pos += 8;
-                Ok(J::DateTime(create_datetime(ns)))
+                Ok(K::DateTime(create_datetime(ns)))
             }
             // month
             243 => {
@@ -138,7 +138,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                     month = 12 + (unit - 11) % 12
                 }
                 *pos += 4;
-                Ok(J::Date(
+                Ok(K::Date(
                     NaiveDate::from_ymd_opt(year, month as u32, 1).unwrap(),
                 ))
             }
@@ -157,20 +157,20 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                         }
                     }
                 };
-                Ok(J::Date(date))
+                Ok(K::Date(date))
             }
             // datetime
             241 => {
                 let unit = f64::from_le_bytes(vec[*pos..*pos + 8].try_into().unwrap());
                 let ns = NANOS_DIFF + (unit * NANOS_PER_DAY as f64) as i64;
                 *pos += 8;
-                Ok(J::DateTime(create_datetime(ns)))
+                Ok(K::DateTime(create_datetime(ns)))
             }
             // timespan
             240 => {
                 let ns = i64::from_le_bytes(vec[*pos..*pos + 8].try_into().unwrap());
                 *pos += 8;
-                Ok(J::Duration(Duration::nanoseconds(ns)))
+                Ok(K::Duration(Duration::nanoseconds(ns)))
             }
             // time, second, minute
             237..=239 => {
@@ -192,7 +192,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                     seconds = unit * 60;
                 }
                 *pos += 4;
-                Ok(J::Time(
+                Ok(K::Time(
                     NaiveTime::from_num_seconds_from_midnight_opt(seconds, nanos).unwrap_or(
                         NaiveTime::from_num_seconds_from_midnight_opt(
                             23 * 3600 + 59 * 60 + 59,
@@ -218,7 +218,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                         for _ in 0..length {
                             res.push(deserialize(vec, pos, false)?);
                         }
-                        return Ok(J::MixedList(res));
+                        return Ok(K::MixedList(res));
                     } else {
                         return Err(e);
                     }
@@ -237,7 +237,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                 let mut key_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
                 let value_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
                 unsafe { key_df.hstack_mut_unchecked(value_df.get_columns()) };
-                Ok(J::DataFrame(key_df))
+                Ok(K::DataFrame(key_df))
             } else if vec[*pos] == 11 {
                 *pos += 1;
                 let end_pos = calculate_array_end_index(vec, *pos, 11)?;
@@ -252,19 +252,19 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
                 let values = deserialize(vec, pos, is_column)?;
                 let keys = Series::try_from(keys).unwrap();
                 match values {
-                    J::Series(s) => {
+                    K::Series(s) => {
                         let mut dict = IndexMap::with_capacity(keys.len());
                         for (k, v) in keys.cat32().unwrap().iter_str().zip(s.iter()) {
-                            dict.insert(k.unwrap().to_string(), J::from_any_value(v));
+                            dict.insert(k.unwrap().to_string(), K::from_any_value(v));
                         }
-                        Ok(J::Dict(dict))
+                        Ok(K::Dict(dict))
                     }
-                    J::MixedList(l) => {
+                    K::MixedList(l) => {
                         let mut dict = IndexMap::with_capacity(keys.len());
                         for (k, v) in keys.cat32().unwrap().iter_str().zip(l.into_iter()) {
                             dict.insert(k.unwrap().to_string(), v);
                         }
-                        Ok(J::Dict(dict))
+                        Ok(K::Dict(dict))
                     }
                     _ => unreachable!(),
                 }
@@ -280,7 +280,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
             let end_pos = calculate_array_end_index(vec, *pos, 11)?;
             let k = deserialize_series(&vec[*pos..end_pos], 11, false)?;
             *pos = end_pos;
-            let symbols = if let J::Series(series) = k {
+            let symbols = if let K::Series(series) = k {
                 series
             } else {
                 return Err(KolaError::DeserializationErr(format!(
@@ -307,14 +307,14 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<J, Ko
             columns.iter_mut().zip(symbols).for_each(|(c, n)| {
                 c.rename(n.unwrap_or("").into());
             });
-            Ok(J::DataFrame(
+            Ok(K::DataFrame(
                 DataFrame::new(columns.into_iter().map(|c| c.into()).collect()).unwrap(),
             ))
         }
         101 => {
             *pos += 1;
             if vec[start_pos] == 0 {
-                Ok(J::Null)
+                Ok(K::Null)
             } else {
                 Err(KolaError::NotSupportedKOperatorErr(vec[*pos]))
             }
@@ -458,7 +458,7 @@ fn calculate_array_end_index(vec: &[u8], start_pos: usize, k_type: u8) -> Result
     }
 }
 
-fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, KolaError> {
+fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, KolaError> {
     let mut pos = 1;
     let length = u32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
@@ -477,7 +477,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
                 BooleanArray::from_slice(array_vec.iter().map(|u| *u == 1).collect::<Vec<_>>())
                     .boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         2 => {
             array_box = FixedSizeBinaryArray::new(
@@ -487,12 +487,12 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             )
             .boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         4 => {
             array_box = UInt8Array::from_vec(array_vec.to_vec()).boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         5 => {
             let array_vec = array_vec.to_vec();
@@ -503,7 +503,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             let mut array = Int16Array::from_slice(slice);
             array.set_validity(Some(bitmap));
             series = Series::from_arrow(name.into(), array.boxed()).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         6 => {
             let array_vec = array_vec.to_vec();
@@ -514,7 +514,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             let mut array = Int32Array::from_slice(slice);
             array.set_validity(Some(bitmap));
             series = Series::from_arrow(name.into(), array.boxed()).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         7 => {
             let array_vec = array_vec.to_vec();
@@ -525,7 +525,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             let mut array = Int64Array::from_slice(slice);
             array.set_validity(Some(bitmap));
             series = Series::from_arrow(name.into(), array.boxed()).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         8 => {
             let array_vec = array_vec.to_vec();
@@ -535,7 +535,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             let mut array = Float32Array::from_slice(slice);
             array.set_validity(Some(bitmap));
             series = Series::from_arrow(name.into(), array.boxed()).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         9 => {
             let array_vec = array_vec.to_vec();
@@ -545,7 +545,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             let mut array = Float64Array::from_slice(slice);
             array.set_validity(Some(bitmap));
             series = Series::from_arrow(name.into(), array.boxed()).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         10 => {
             if as_column {
@@ -558,9 +558,9 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
                 )
                 .boxed();
                 series = Series::from_arrow(name.into(), array_box).unwrap();
-                Ok(J::Series(series))
+                Ok(K::Series(series))
             } else {
-                Ok(J::String(String::from_utf8_lossy(array_vec).to_string()))
+                Ok(K::String(String::from_utf8_lossy(array_vec).to_string()))
             }
         }
         11 => {
@@ -593,7 +593,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
                     ))
                     .unwrap();
             }
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         12 => {
             let array_vec = array_vec.to_vec();
@@ -614,7 +614,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             );
             array_box = array.boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         14 => {
             let array_vec = array_vec.to_vec();
@@ -631,7 +631,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             let array = PrimitiveArray::new(ArrowDataType::Date32, slice.into(), Some(bitmap));
             array_box = array.boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         15 => {
             let array_vec = array_vec.to_vec();
@@ -659,7 +659,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             );
             array_box = array.boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         // timespan
         16 => {
@@ -674,7 +674,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             );
             array_box = array.boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         // minutes, seconds, time
         17..=19 => {
@@ -705,13 +705,13 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<J, Kola
             );
             array_box = array.boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
-            Ok(J::Series(series))
+            Ok(K::Series(series))
         }
         _ => Err(KolaError::NotSupportedKListErr(k_type)),
     }
 }
 
-fn new_empty_series(k_type: u8) -> Result<J, KolaError> {
+fn new_empty_series(k_type: u8) -> Result<K, KolaError> {
     let name = K_TYPE_NAME[k_type as usize];
     let series = match k_type {
         0 => Series::new_empty(name.into(), &PolarsDataType::Null),
@@ -739,10 +739,10 @@ fn new_empty_series(k_type: u8) -> Result<J, KolaError> {
         17..=19 => Series::new_empty(name.into(), &PolarsDataType::Time),
         _ => return Err(KolaError::NotSupportedKListErr(k_type)),
     };
-    Ok(J::Series(series))
+    Ok(K::Series(series))
 }
 
-fn deserialize_nested_array(vec: &[u8]) -> Result<J, KolaError> {
+fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
     let mut pos: usize = 1;
     let length = u32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
@@ -805,7 +805,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<J, KolaError> {
                     .boxed(),
             ))
             .unwrap();
-        return Ok(J::Series(series));
+        return Ok(K::Series(series));
     } else {
         return Err(KolaError::NotSupportedKNestedListErr(k_type));
     }
@@ -894,7 +894,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<J, KolaError> {
                 None,
             );
 
-            Ok(J::Series(
+            Ok(K::Series(
                 Series::from_arrow(name.into(), list_array.boxed()).unwrap(),
             ))
         }
@@ -906,7 +906,7 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<J, KolaError> {
                 None,
             )
             .boxed();
-            Ok(J::Series(
+            Ok(K::Series(
                 Series::from_arrow(name.into(), array_box).unwrap(),
             ))
         }
@@ -1060,66 +1060,66 @@ pub fn compress(vec: Vec<u8>) -> Vec<u8> {
     }
 }
 
-pub fn serialize(k: &J) -> Result<Vec<u8>, KolaError> {
+pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
     let k_length = k.j6_len()?;
     let mut vec: Vec<u8>;
     match k {
-        J::Boolean(k) => {
+        K::Boolean(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[255, (*k as u8)]).unwrap();
         }
-        J::Guid(k) => {
+        K::Guid(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[254u8]).unwrap();
             vec.write_all(k.as_bytes()).unwrap();
         }
-        J::U8(k) => {
+        K::U8(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[252, *k]).unwrap();
         }
-        J::I16(k) => {
+        K::I16(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[251]).unwrap();
             vec.write_all(&NativeType::to_le_bytes(k)).unwrap();
         }
-        J::I32(k) => {
+        K::I32(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[250]).unwrap();
             vec.write_all(&NativeType::to_le_bytes(k)).unwrap();
         }
-        J::I64(k) => {
+        K::I64(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[249]).unwrap();
             vec.write_all(&NativeType::to_le_bytes(k)).unwrap();
         }
-        J::F32(k) => {
+        K::F32(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[248]).unwrap();
             vec.write_all(&NativeType::to_le_bytes(k)).unwrap();
         }
-        J::F64(k) => {
+        K::F64(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[247]).unwrap();
             vec.write_all(&NativeType::to_le_bytes(k)).unwrap();
         }
-        J::Char(k) => {
+        K::Char(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[246, *k]).unwrap();
         }
-        J::Symbol(k) => {
+        K::Symbol(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[245]).unwrap();
             vec.write_all(k.as_bytes()).unwrap();
             vec.write_all(&[0]).unwrap();
         }
-        J::String(k) => {
+        K::String(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[10, 0]).unwrap();
             vec.write_all(&(k.len() as u32).to_le_bytes()).unwrap();
             vec.write_all(k.as_bytes()).unwrap();
         }
         // to timestamp
-        J::DateTime(k) => {
+        K::DateTime(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[244]).unwrap();
             let ns = match k.timestamp_nanos_opt() {
@@ -1129,28 +1129,28 @@ pub fn serialize(k: &J) -> Result<Vec<u8>, KolaError> {
             vec.write_all(&ns.to_le_bytes()).unwrap();
         }
         // to date
-        J::Date(k) => {
+        K::Date(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[242]).unwrap();
             let days = k.num_days_from_ce().saturating_sub(DAY_DIFF);
             vec.write_all(&days.to_le_bytes()).unwrap();
         }
         // to time
-        J::Time(k) => {
+        K::Time(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[237]).unwrap();
             let milliseconds = k.num_seconds_from_midnight() * 1000 + k.nanosecond() / 1000000;
             vec.write_all(&(milliseconds as i32).to_le_bytes()).unwrap();
         }
         // to timespan
-        J::Duration(k) => {
+        K::Duration(k) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[240]).unwrap();
             let ns = k.num_nanoseconds();
             vec.write_all(&(ns.unwrap_or(i64::MIN)).to_le_bytes())
                 .unwrap();
         }
-        J::MixedList(l) => {
+        K::MixedList(l) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[0, 0]).unwrap();
             vec.write_all(&(l.len() as u32).to_le_bytes()).unwrap();
@@ -1159,11 +1159,11 @@ pub fn serialize(k: &J) -> Result<Vec<u8>, KolaError> {
             }
         }
         // to list
-        J::Series(k) => {
+        K::Series(k) => {
             vec = serialize_series(k, k_length)?;
         }
         // to table
-        J::DataFrame(k) => {
+        K::DataFrame(k) => {
             vec = Vec::with_capacity(k_length);
             let column_names = k.get_column_names();
             let column_count = column_names.len() as i32;
@@ -1190,11 +1190,11 @@ pub fn serialize(k: &J) -> Result<Vec<u8>, KolaError> {
             });
         }
         // to (::)
-        J::Null => {
+        K::Null => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[101, 0]).unwrap();
         }
-        J::Dict(dict) => {
+        K::Dict(dict) => {
             let keys = dict.keys();
             let length = keys.len() as i32;
             if length == 0 {
@@ -1917,7 +1917,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -1943,7 +1943,7 @@ mod tests {
         let expect = Series::from_arrow(name.into(), binary_array.boxed()).unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -1955,7 +1955,7 @@ mod tests {
             Series::from_arrow(name.into(), UInt8Array::from([Some(0), Some(1)]).boxed()).unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -1971,7 +1971,7 @@ mod tests {
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
         let vec = [5, 0, 4, 0, 0, 0, 0, 128, 0, 128, 0, 0, 0, 128].to_vec();
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -1993,7 +1993,7 @@ mod tests {
             6, 0, 4, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 128,
         ]
         .to_vec();
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2017,7 +2017,7 @@ mod tests {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 128,
         ]
         .to_vec();
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2041,7 +2041,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2066,7 +2066,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2090,7 +2090,7 @@ mod tests {
             series.to_arrow(0, CompatLevel::newest()),
             expect.to_arrow(0, CompatLevel::newest())
         );
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2109,7 +2109,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2133,7 +2133,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2156,7 +2156,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2203,7 +2203,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2270,7 +2270,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2299,7 +2299,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2327,7 +2327,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2355,7 +2355,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2384,7 +2384,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2413,7 +2413,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2442,7 +2442,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2472,7 +2472,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2501,7 +2501,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2530,7 +2530,7 @@ mod tests {
         .unwrap();
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
-        assert_eq!(vec, serialize(&J::Series(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
     }
 
     #[test]
@@ -2541,10 +2541,10 @@ mod tests {
         ]
         .to_vec();
         let k = deserialize(&vec, &mut 0, false).unwrap();
-        let expect = J::MixedList(vec![
-            J::Symbol("upd".to_owned()),
-            J::Symbol("t".to_owned()),
-            J::DataFrame(
+        let expect = K::MixedList(vec![
+            K::Symbol("upd".to_owned()),
+            K::Symbol("t".to_owned()),
+            K::DataFrame(
                 DataFrame::new(vec![Series::new("a".into(), [1i64].as_ref()).into()]).unwrap(),
             ),
         ]);
@@ -2565,7 +2565,7 @@ mod tests {
         let s1 = Series::new("b".into(), [1.0f64].as_ref());
         let expect = DataFrame::new(vec![s0.into(), s1.into()]).unwrap();
         assert_eq!(df, expect);
-        assert_eq!(vec, serialize(&J::DataFrame(expect)).unwrap());
+        assert_eq!(vec, serialize(&K::DataFrame(expect)).unwrap());
     }
 
     #[test]
@@ -2586,13 +2586,13 @@ mod tests {
 
     #[test]
     fn serialize_bool() {
-        let k = J::Boolean(true);
+        let k = K::Boolean(true);
         assert_eq!(serialize(&k).unwrap(), [255, 1]);
     }
 
     #[test]
     fn serialize_guid() {
-        let k = J::Guid(
+        let k = K::Guid(
             Uuid::from_slice(&[
                 88, 13, 140, 135, 229, 87, 13, 177, 58, 25, 203, 58, 68, 214, 35, 177,
             ])
@@ -2606,25 +2606,25 @@ mod tests {
 
     #[test]
     fn serialize_byte() {
-        let k = J::U8(99);
+        let k = K::U8(99);
         assert_eq!(serialize(&k).unwrap(), [252, 99]);
     }
 
     #[test]
     fn serialize_short() {
-        let k = J::I16(99);
+        let k = K::I16(99);
         assert_eq!(serialize(&k).unwrap(), [251, 99, 0]);
     }
 
     #[test]
     fn serialize_int() {
-        let k = J::I32(99999999);
+        let k = K::I32(99999999);
         assert_eq!(serialize(&k).unwrap(), [250, 255, 224, 245, 5]);
     }
 
     #[test]
     fn serialize_long() {
-        let k = J::I64(9999_9999_9999_9999);
+        let k = K::I64(9999_9999_9999_9999);
         assert_eq!(
             serialize(&k).unwrap(),
             [249, 255, 255, 192, 111, 242, 134, 35, 0]
@@ -2633,31 +2633,31 @@ mod tests {
 
     #[test]
     fn serialize_real() {
-        let k = J::F32(9.9e10);
+        let k = K::F32(9.9e10);
         assert_eq!(serialize(&k).unwrap(), [248, 225, 102, 184, 81]);
     }
 
     #[test]
     fn serialize_float() {
-        let k = J::F64(9.9e10);
+        let k = K::F64(9.9e10);
         assert_eq!(serialize(&k).unwrap(), [247, 0, 0, 0, 30, 220, 12, 55, 66]);
     }
 
     #[test]
     fn serialize_symbol() {
-        let k = J::Symbol("abc".to_string());
+        let k = K::Symbol("abc".to_string());
         assert_eq!(serialize(&k).unwrap(), [245, 97, 98, 99, 0]);
     }
 
     #[test]
     fn serialize_string() {
-        let k = J::String("abc".to_string());
+        let k = K::String("abc".to_string());
         assert_eq!(serialize(&k).unwrap(), [10, 0, 3, 0, 0, 0, 97, 98, 99]);
     }
 
     #[test]
     fn serialize_timestamp() {
-        let k = J::DateTime(DateTime::<Utc>::from_timestamp(0, 123456789).unwrap());
+        let k = K::DateTime(DateTime::<Utc>::from_timestamp(0, 123456789).unwrap());
         assert_eq!(
             serialize(&k).unwrap(),
             [244, 21, 205, 24, 181, 48, 179, 220, 242]
@@ -2666,19 +2666,19 @@ mod tests {
 
     #[test]
     fn serialize_date() {
-        let k = J::Date(NaiveDate::from_ymd_opt(2023, 11, 15).unwrap());
+        let k = K::Date(NaiveDate::from_ymd_opt(2023, 11, 15).unwrap());
         assert_eq!(serialize(&k).unwrap(), [242, 15, 34, 0, 0]);
     }
 
     #[test]
     fn serialize_time() {
-        let k = J::Time(NaiveTime::from_hms_milli_opt(0, 17, 24, 70).unwrap());
+        let k = K::Time(NaiveTime::from_hms_milli_opt(0, 17, 24, 70).unwrap());
         assert_eq!(serialize(&k).unwrap(), [237, 102, 238, 15, 0]);
     }
 
     #[test]
     fn serialize_duration() {
-        let k = J::Duration(Duration::nanoseconds(822896123456789));
+        let k = K::Duration(Duration::nanoseconds(822896123456789));
         assert_eq!(
             serialize(&k).unwrap(),
             [240, 21, 45, 32, 111, 107, 236, 2, 0]
@@ -2687,7 +2687,7 @@ mod tests {
 
     #[test]
     fn serialize_none() {
-        let k = J::Null;
+        let k = K::Null;
         assert_eq!(serialize(&k).unwrap(), [101, 0]);
     }
 
@@ -2699,9 +2699,9 @@ mod tests {
         ]
         .to_vec();
         let mut dict = IndexMap::with_capacity(2);
-        dict.insert("a".to_string(), J::I64(1));
-        dict.insert("b".to_string(), J::F64(1.0));
-        let k = J::Dict(dict);
+        dict.insert("a".to_string(), K::I64(1));
+        dict.insert("b".to_string(), K::F64(1.0));
+        let k = K::Dict(dict);
         assert_eq!(deserialize(&vec, &mut 0, false).unwrap(), k);
         assert_eq!(vec, serialize(&k).unwrap());
     }

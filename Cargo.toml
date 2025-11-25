@@ -9,7 +9,7 @@ authors = ["Jo Shinonome <jo.shinonome@gmail.com>"]
 edition = "2021"
 repository = "https://github.com/jshinonome/kola"
 license = "BSD-3-Clause"
-description = "a Python Polars interface to j* and q"
+description = "a Python Polars interface to q"
 
 [profile.dev]
 opt-level = 1

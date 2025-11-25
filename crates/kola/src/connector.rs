@@ -1,7 +1,6 @@
 use crate::errors::KolaError;
 use crate::serde6::{compress, decompress, deserialize, serialize};
-use crate::serde9;
-use crate::types::{MsgType, J};
+use crate::types::{MsgType, K};
 use native_tls::TlsConnector;
 use std::error::Error;
 use std::io::{self, Read as IoRead, Write as IoWrite};
@@ -78,7 +77,7 @@ impl Connector {
         }
     }
 
-    pub fn send(&mut self, msg_type: MsgType, expr: &str, args: &[J]) -> Result<(), KolaError> {
+    pub fn send(&mut self, msg_type: MsgType, expr: &str, args: &[K]) -> Result<(), KolaError> {
         if self.version <= 6 {
             if let Some(stream) = &mut self.stream {
                 let expr = expr.trim();
@@ -159,54 +158,12 @@ impl Connector {
             } else {
                 Err(KolaError::NotConnectedErr())
             }
-        } else if let Some(stream) = &mut self.stream {
-            let expr = expr.trim();
-            // serde::serialize(stream, args.get_item(0).unwrap())
-            if args.is_empty() {
-                let vec: Vec<u8> = serde9::serialize(&J::String(expr.to_string()), !self.is_local)?;
-                stream.write_all(&[1, msg_type as u8, 0, 0, 0, 0, 0, 0])?;
-                stream.write_all(&vec.len().to_le_bytes())?;
-                match stream.write_all(&vec) {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        self.shutdown()?;
-                        Err(KolaError::IOError(e))
-                    }
-                }
-            } else {
-                let mut vectors: Vec<Vec<u8>> = Vec::with_capacity(args.len() + 1);
-                vectors.push(serde9::serialize(
-                    &J::String(expr.to_string()),
-                    !self.is_local,
-                )?);
-                for k in args.iter() {
-                    vectors.push(serde9::serialize(k, !self.is_local)?)
-                }
-                let total_length = vectors.iter().map(|v| v.len()).sum::<usize>();
-                // 8 bytes header
-                stream.write_all(&[1, msg_type as u8, 0, 0, 0, 0, 0, 0])?;
-                // 8 bytes total length
-                stream.write_all(&(16 + total_length).to_le_bytes())?;
-                stream.write_all(&[90, 0, 0, 0])?;
-                stream.write_all(&(vectors.len() as u32).to_le_bytes())?;
-                stream.write_all(&total_length.to_le_bytes())?;
-                for vector in vectors.into_iter() {
-                    match stream.write_all(&vector) {
-                        Ok(_) => (),
-                        Err(e) => {
-                            self.shutdown()?;
-                            return Err(KolaError::IOError(e));
-                        }
-                    }
-                }
-                Ok(())
-            }
         } else {
             Err(KolaError::NotConnectedErr())
         }
     }
 
-    pub fn receive(&mut self) -> Result<J, KolaError> {
+    pub fn receive(&mut self) -> Result<K, KolaError> {
         if self.version <= 6 {
             if let Some(stream) = &mut self.stream {
                 let mut header = [0u8; 8];
@@ -249,30 +206,6 @@ impl Connector {
             } else {
                 Err(KolaError::NotConnectedErr())
             }
-        } else if let Some(stream) = &mut self.stream {
-            let mut header = [0u8; 16];
-            match stream.read_exact(&mut header) {
-                Ok(_) => (),
-                Err(e) => {
-                    self.shutdown()?;
-                    return Err(KolaError::IOError(e));
-                }
-            };
-            let encoding = header[0];
-            if encoding == 0 {
-                self.shutdown()?;
-                return Err(KolaError::NotSupportedBigEndianErr());
-            }
-            let length = u64::from_le_bytes(header[8..].try_into().unwrap()) as usize;
-            let mut vec: Vec<u8> = vec![0u8; length];
-            match stream.read_exact(&mut vec) {
-                Ok(_) => (),
-                Err(e) => {
-                    self.shutdown()?;
-                    return Err(KolaError::IOError(e));
-                }
-            };
-            serde9::deserialize(&vec, &mut 0)
         } else {
             Err(KolaError::NotConnectedErr())
         }
@@ -352,7 +285,7 @@ impl Connector {
         }
     }
 
-    pub fn execute(&mut self, expr: &str, args: &[J]) -> Result<J, KolaError> {
+    pub fn execute(&mut self, expr: &str, args: &[K]) -> Result<K, KolaError> {
         if self.stream.is_none() {
             self.connect()?;
         };
@@ -360,7 +293,7 @@ impl Connector {
         self.receive()
     }
 
-    pub fn execute_async(&mut self, expr: &str, args: &[J]) -> Result<(), KolaError> {
+    pub fn execute_async(&mut self, expr: &str, args: &[K]) -> Result<(), KolaError> {
         if self.stream.is_none() {
             self.connect()?;
         };
