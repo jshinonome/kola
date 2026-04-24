@@ -37,7 +37,6 @@ jobs:
         platform:
           - runner: ubuntu-22.04
             target: x86_64
-            manylinux: 2_24
     steps:
       - uses: actions/checkout@v4
         with:

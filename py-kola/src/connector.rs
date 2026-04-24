@@ -42,9 +42,9 @@ impl KolaConnector {
         }
     }
 
-    fn execute(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
+    fn execute(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<Py<PyAny>> {
         let args = cast_to_k_vec(args)?;
-        let k = py.allow_threads(move || self.q.execute(expr, &args));
+        let k = py.detach(move || self.q.execute(expr, &args));
         let k = match k {
             Ok(k) => k,
             Err(e) => return Err(PyKolaError::from(e).into()),
@@ -59,12 +59,12 @@ impl KolaConnector {
         args: Bound<PyTuple>,
     ) -> Result<(), PyKolaError> {
         let args = cast_to_k_vec(args)?;
-        let _ = py.allow_threads(move || self.q.execute_async(expr, &args));
+        let _ = py.detach(move || self.q.execute_async(expr, &args));
         Ok(())
     }
 }
 
-fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
+fn cast_k_to_py(py: Python, k: K) -> PyResult<Py<PyAny>> {
     match k {
         K::Boolean(k) => k.into_py_any(py),
         K::Guid(k) => k.to_string().into_py_any(py),
@@ -121,7 +121,7 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<PyObject> {
             let py_objects = l
                 .into_iter()
                 .map(|k| cast_k_to_py(py, k))
-                .collect::<PyResult<Vec<PyObject>>>()?;
+                .collect::<PyResult<Vec<Py<PyAny>>>>()?;
             PyTuple::new(py, py_objects).unwrap().into_py_any(py)
         }
         K::Series(k) => PySeries(k).into_py_any(py),
@@ -155,21 +155,21 @@ impl KolaConnector {
     }
 
     pub fn connect(&mut self, py: Python) -> Result<(), PyKolaError> {
-        py.allow_threads(|| match self.q.connect() {
+        py.detach(|| match self.q.connect() {
             Ok(_) => Ok(()),
             Err(e) => Err(PyKolaError::from(e)),
         })
     }
 
     pub fn shutdown(&mut self, py: Python) -> Result<(), PyKolaError> {
-        py.allow_threads(|| match self.q.shutdown() {
+        py.detach(|| match self.q.shutdown() {
             Ok(_) => Ok(()),
             Err(e) => Err(PyKolaError::from(e)),
         })
     }
 
     #[pyo3(signature = (expr, *args))]
-    pub fn sync(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<PyObject> {
+    pub fn sync(&mut self, py: Python, expr: &str, args: Bound<PyTuple>) -> PyResult<Py<PyAny>> {
         self.execute(py, expr, args)
     }
 
@@ -183,8 +183,8 @@ impl KolaConnector {
         self.execute_async(py, expr, args)
     }
 
-    pub fn receive(&mut self, py: Python) -> PyResult<PyObject> {
-        let k = py.allow_threads(move || self.q.receive().map_err(PyKolaError::from));
+    pub fn receive(&mut self, py: Python) -> PyResult<Py<PyAny>> {
+        let k = py.detach(move || self.q.receive().map_err(PyKolaError::from));
         cast_k_to_py(py, k?)
     }
 }
