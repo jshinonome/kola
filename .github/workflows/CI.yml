@@ -173,14 +173,12 @@ jobs:
       # Used to generate artifact attestation
       attestations: write
     steps:
-      - uses: actions/download-artifact@v4
-      - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: 'wheels-*/*'
-      - name: Publish to PyPI
-        if: inputs.dry-run == false
-        uses: PyO3/maturin-action@v1
-        with:
-          command: upload
-          args: --non-interactive --skip-existing wheels-*/*
+        - name: Install uv
+          uses: astral-sh/setup-uv@v6
+
+        - name: Download artifacts
+          uses: actions/download-artifact@v7
+
+        - name: Publish
+          if: inputs.dry-run == false
+          run: uv publish wheels-*/*
