@@ -10,7 +10,8 @@ name = "kola"
 crate-type = ["lib"]
 
 [dependencies]
-native-tls = "0.2.14"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pki-types = "1"
 chrono = "0.4.41"
 polars-arrow = { workspace = true }
 thiserror = "2.0.16"

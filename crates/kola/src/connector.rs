@@ -1,11 +1,53 @@
 use crate::errors::KolaError;
 use crate::serde6::{compress, decompress, deserialize, serialize};
 use crate::types::{MsgType, K};
-use native_tls::TlsConnector;
-use std::error::Error;
+use rustls::pki_types::ServerName;
+use rustls::StreamOwned;
 use std::io::{self, Read as IoRead, Write as IoWrite};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::sync::Arc;
 use std::time::Duration;
+
+#[derive(Debug)]
+struct NoCertVerifier;
+
+impl rustls::client::danger::ServerCertVerifier for NoCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
 pub(crate) trait QStream: IoRead + IoWrite {
     fn shutdown(&self, how: Shutdown) -> io::Result<()>;
 }
@@ -243,20 +285,19 @@ impl Connector {
             }
 
             if self.enable_tls {
-                let connector = TlsConnector::builder()
-                    .danger_accept_invalid_certs(true)
-                    .danger_accept_invalid_hostnames(true)
-                    .build()
+                let config = rustls::ClientConfig::builder()
+                    .dangerous()
+                    .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
+                    .with_no_client_auth();
+                let server_name = ServerName::try_from(self.host.as_str())
+                    .unwrap_or_else(|_| {
+                        let ip: std::net::IpAddr = self.host.parse().expect("invalid host");
+                        ServerName::IpAddress(ip.into())
+                    })
+                    .to_owned();
+                let conn = rustls::ClientConnection::new(Arc::new(config), server_name)
                     .map_err(|e| KolaError::Err(e.to_string()))?;
-                let mut tls_stream = match connector.connect(&socket, tcp_stream) {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        if let Some(e) = e.source() {
-                            return Err(KolaError::FailedToConnectErr(e.to_string()));
-                        }
-                        return Err(KolaError::NotConnectedErr());
-                    }
-                };
+                let mut tls_stream = StreamOwned::new(conn, tcp_stream);
                 self.auth(&mut tls_stream)?;
                 self.stream = Some(Box::new(tls_stream));
                 Ok(())
