@@ -1,116 +1,17 @@
 # kola
 
-a Python [Polars](https://pola-rs.github.io/polars/) Interface to `q`
+[![PyPI](https://img.shields.io/pypi/v/kola)](https://pypi.org/project/kola/)
+[![Python](https://img.shields.io/pypi/pyversions/kola)](https://pypi.org/project/kola/)
 
-## Basic Data Type Map
+A Python [Polars](https://pola-rs.github.io/polars/) interface to kdb+/q, powered by Rust.
 
-### q
+## Installation
 
-#### Deserialization
-
-##### Atom
-
-| k type      | n   | size | python type | note                        |
-| ----------- | --- | ---- | ----------- | --------------------------- |
-| `boolean`   | 1   | 1    | `bool`      |                             |
-| `guid`      | 2   | 16   | `str`       |                             |
-| `byte`      | 4   | 1    | `int`       |                             |
-| `short`     | 5   | 2    | `int`       |                             |
-| `int`       | 6   | 4    | `int`       |                             |
-| `long`      | 7   | 8    | `int`       |                             |
-| `real`      | 8   | 4    | `float`     |                             |
-| `float`     | 9   | 8    | `float`     |                             |
-| `char`      | 10  | 1    | `str`       |                             |
-| `string`    | 10  | 1    | `str`       |                             |
-| `symbol`    | 11  | \*   | `str`       |                             |
-| `timestamp` | 12  | 8    | `datetime`  |                             |
-| `month`     | 13  | 4    | `-`         |                             |
-| `date`      | 14  | 4    | `date`      | 0001.01.01 - 9999.12.31     |
-| `datetime`  | 15  | 8    | `datetime`  |                             |
-| `timespan`  | 16  | 8    | `timedelta` |                             |
-| `minute`    | 17  | 4    | `time`      | 00:00 - 23:59               |
-| `second`    | 18  | 4    | `time`      | 00:00:00 - 23:59:59         |
-| `time`      | 19  | 4    | `time`      | 00:00:00.000 - 23:59:59.999 |
-
-##### Composite Data Type
-
-| k type           | n   | size | python type              |
-| ---------------- | --- | ---- | ------------------------ |
-| `boolean list`   | 1   | 1    | `pl.Boolean`             |
-| `guid list`      | 2   | 16   | `pl.List(pl.Binary(16))` |
-| `byte list`      | 4   | 1    | `pl.Uint8`               |
-| `short list`     | 5   | 2    | `pl.Int16`               |
-| `int list`       | 6   | 4    | `pl.Int32`               |
-| `long list`      | 7   | 8    | `pl.Int64`               |
-| `real list`      | 8   | 4    | `pl.Float32`             |
-| `float list`     | 9   | 8    | `pl.Float64`             |
-| `char list`      | 10  | 1    | `pl.Utf8`                |
-| `string list`    | 10  | 1    | `pl.Utf8`                |
-| `symbol list`    | 11  | \*   | `pl.Categorical`         |
-| `timestamp list` | 12  | 8    | `pl.Datetime`            |
-| `month list`     | 13  | 4    | `-`                      |
-| `date list`      | 14  | 4    | `pl.Date`                |
-| `datetime list`  | 15  | 8    | `pl.Datetime`            |
-| `timespan list`  | 16  | 8    | `pl.Duration`            |
-| `minute list`    | 17  | 4    | `pl.Time`                |
-| `second list`    | 18  | 4    | `pl.Time`                |
-| `time list`      | 19  | 4    | `pl.Time`                |
-| `table`          | 98  | \*   | `pl.DataFrame`           |
-| `dictionary`     | 99  | \*   | `-`                      |
-| `keyed table`    | 99  | \*   | `pl.DataFrame`           |
-
-> performance is impacted by converting guid to string, deserialize the uuid to 16 fixed binary list, use .hex() to convert binary to string if required
-
-> real/float 0n is mapped to Polars null not NaN
-
-> short/int/long 0Nh/i/j, 0Wh/i/j and -0Wh/i/j are mapped to null
-
-```
-df.with_columns([
-    (pl.col("uuid").apply(lambda u: u.hex()))
-    ])
+```bash
+pip install kola
 ```
 
-#### Serialization
-
-##### Basic Data Type
-
-| python type | k type      | note                        |
-| ----------- | ----------- | --------------------------- |
-| `bool`      | `boolean`   |                             |
-| `int`       | `long`      |                             |
-| `float`     | `float`     |                             |
-| `str`       | `symbol`    |                             |
-| `bytes`     | `string`    |                             |
-| `datetime`  | `timestamp` |                             |
-| `date`      | `date`      | 0001.01.01 - 9999.12.31     |
-| `datetime`  | `datetime`  |                             |
-| `timedelta` | `timespan`  |                             |
-| `time`      | `time`      | 00:00:00.000 - 23:59:59.999 |
-
-##### Dictionary, Series and DataFrame
-
-| python type              | k type    |
-| ------------------------ | --------- |
-| `dict`                   | dict      |
-| `pl.Boolean`             | boolean   |
-| `pl.List(pl.Binary(16))` | guid      |
-| `pl.Uint8`               | byte      |
-| `pl.Int16`               | short     |
-| `pl.Int32`               | int       |
-| `pl.Int64`               | long      |
-| `pl.Float32`             | real      |
-| `pl.Float64`             | float     |
-| `pl.Utf8`                | char      |
-| `pl.Categorical`         | symbol    |
-| `pl.Datetime`            | timestamp |
-| `pl.Date`                | date      |
-| `pl.Datetime`            | datetime  |
-| `pl.Duration`            | timespan  |
-| `pl.Time`                | time      |
-| `pl.DataFrame`           | table     |
-
-> Limited Support for dictionary as arguments, requires `string` as keys.
+**Requirements**: Python ≥ 3.10, Polars ≥ 1.31.0, PyArrow ≥ 20.0.0
 
 ## Quick Start
 
@@ -119,24 +20,36 @@ df.with_columns([
 ```python
 import polars as pl
 import kola
-# Connect to q
+
+# basic connection
 conn = kola.Q('localhost', 1800)
 
+# with authentication
+conn = kola.Q('localhost', 1800, user='user', passwd='password')
+
+# with TLS and retry
+conn = kola.Q('localhost', 1800, enable_tls=True, retries=3, timeout=30)
 ```
 
-### Connect(Optional)
+**Parameters**:
 
-Automatically connect when querying q process
+| Parameter    | Type   | Default | Description                                        |
+| ------------ | ------ | ------- | -------------------------------------------------- |
+| `host`       | `str`  |         | Hostname of the q process                          |
+| `port`       | `int`  |         | Port of the q process                              |
+| `user`       | `str`  | `""`    | Username (defaults to OS login user)               |
+| `passwd`     | `str`  | `""`    | Password                                           |
+| `enable_tls` | `bool` | `False` | Enable TLS encryption                              |
+| `retries`    | `int`  | `0`     | Number of retries with exponential backoff          |
+| `timeout`    | `int`  | `0`     | Connection timeout in seconds (0 = no timeout)     |
+
+### Connect / Disconnect
 
 ```python
+# explicitly connect (auto-connects on first query)
 conn.connect()
-```
 
-### Disconnect
-
-Automatically disconnect if any IO error
-
-```python
+# disconnect (auto-disconnects on IO error)
 conn.disconnect()
 ```
 
@@ -148,7 +61,7 @@ conn.sync("select from trade where date=last date")
 
 ### Functional Query
 
-For functional query, `kola` supports Python [Basic Data Type](#basic-data-type), `pl.Series`, `pl.DataFrame` and Python Dictionary with string keys and Python [Basic Data Type](#basic-data-type) and `pl.Series` values.
+Supports Python [basic data types](#basic-data-type), `pl.Series`, `pl.DataFrame`, and `dict` (with string keys).
 
 ```python
 from datetime import date, time
@@ -158,10 +71,8 @@ conn.sync(
     "table",
     {
         "date": date(2023, 11, 21),
-        "syms": pl.Series("", ["sym0", "sym1"], pl.Categorical),
-        # 09:00
+        "syms": pl.Series("", ["sym0", "sym1"], kola.QType.Symbol),
         "startTime": time(9),
-        # 11:30
         "endTime": time(11, 30),
     },
 )
@@ -170,19 +81,16 @@ conn.sync(
 ### Send DataFrame
 
 ```python
-# pl_df is a Polars DataFrame
+# Polars DataFrame
 conn.sync("upsert", "table", pl_df)
-```
 
-```python
-# pd_df is a Pandas DataFrame, use pl.DateFrame to cast Pandas DataFrame
+# Pandas DataFrame (cast to Polars first)
 conn.sync("upsert", "table", pl.DataFrame(pd_df))
 ```
 
 ### Async Query
 
 ```python
-# pl_df is a Polars DataFrame
 conn.asyn("upsert", "table", pl_df)
 ```
 
@@ -193,23 +101,24 @@ from kola import QType
 
 conn.sync(".u.sub", pl.Series("", ["table1", "table2"], QType.Symbol), "")
 
-# specify symbol filter
+# with symbol filter
 conn.sync(
     ".u.sub",
     pl.Series("", ["table1", "table2"], QType.Symbol),
     pl.Series("", ["sym1", "sym2"], QType.Symbol),
 )
 
-while true:
-    # ("upd", "table", pl.Dataframe)
+while True:
+    # returns ("upd", "table", pl.DataFrame)
     upd = conn.receive()
     print(upd)
 ```
 
-### Generate IPC for q
+### Generate IPC Bytes
+
+Serialize data as kdb+ IPC bytes without a connection.
 
 ```python
-import polars as pl
 from kola import serialize_as_ipc_bytes6
 
 df = pl.DataFrame(
@@ -218,6 +127,7 @@ df = pl.DataFrame(
         "price": [1, 2, 3],
     }
 )
+
 # without compression
 buffer = serialize_as_ipc_bytes6("sync", False, ["upd", "table", df])
 
@@ -225,9 +135,161 @@ buffer = serialize_as_ipc_bytes6("sync", False, ["upd", "table", df])
 buffer = serialize_as_ipc_bytes6("sync", True, ["upd", "table", df])
 ```
 
-## Polars Documentations
+**`msg_type`**: `"async"` | `"sync"` | `"response"`
 
-Refer to
+### Read Binary Table
 
-- [User Guide](https://pola-rs.github.io/polars/user-guide/)
-- [API Reference](https://pola-rs.github.io/polars/py-polars/html/reference/index.html)
+Read a kdb+ binary table (splayed/flat file) directly into a Polars DataFrame.
+
+```python
+from kola import read_binary6
+
+df = read_binary6("/path/to/binary/table")
+```
+
+## Error Handling
+
+```python
+from kola import KolaError, KolaIOError, KolaAuthError
+
+try:
+    conn.sync("select from trade")
+except KolaAuthError:
+    print("Authentication failed")
+except KolaIOError:
+    print("Connection error")
+except KolaError:
+    print("General kola error")
+```
+
+## QType
+
+`kola.QType` provides Polars dtype aliases for q types, useful when constructing `pl.Series` for functional queries.
+
+| QType       | Polars dtype          |
+| ----------- | --------------------- |
+| `Boolean`   | `pl.Boolean`          |
+| `Guid`      | `pl.Array(pl.Binary, 16)` |
+| `Byte`      | `pl.UInt8`            |
+| `Short`     | `pl.Int16`            |
+| `Int`       | `pl.Int32`            |
+| `Long`      | `pl.Int64`            |
+| `Real`      | `pl.Float32`          |
+| `Float`     | `pl.Float64`          |
+| `Char`      | `pl.UInt8`            |
+| `String`    | `pl.Utf8`             |
+| `Symbol`    | `pl.Categorical`      |
+| `Timestamp` | `pl.Datetime("ns")`   |
+| `Date`      | `pl.Date`             |
+| `Datetime`  | `pl.Datetime("ms")`   |
+| `Timespan`  | `pl.Duration("ns")`   |
+| `Time`      | `pl.Time`             |
+
+## Data Type Mapping
+
+### Deserialization (q → Python)
+
+#### Atom
+
+| q type      | n   | size | Python type  | Note                        |
+| ----------- | --- | ---- | ------------ | --------------------------- |
+| `boolean`   | 1   | 1    | `bool`       |                             |
+| `guid`      | 2   | 16   | `str`        |                             |
+| `byte`      | 4   | 1    | `int`        |                             |
+| `short`     | 5   | 2    | `int`        |                             |
+| `int`       | 6   | 4    | `int`        |                             |
+| `long`      | 7   | 8    | `int`        |                             |
+| `real`      | 8   | 4    | `float`      |                             |
+| `float`     | 9   | 8    | `float`      |                             |
+| `char`      | 10  | 1    | `str`        |                             |
+| `string`    | 10  | 1    | `str`        |                             |
+| `symbol`    | 11  | \*   | `str`        |                             |
+| `timestamp` | 12  | 8    | `datetime`   |                             |
+| `month`     | 13  | 4    | `-`          |                             |
+| `date`      | 14  | 4    | `date`       | 0001.01.01 - 9999.12.31     |
+| `datetime`  | 15  | 8    | `datetime`   |                             |
+| `timespan`  | 16  | 8    | `timedelta`  |                             |
+| `minute`    | 17  | 4    | `time`       | 00:00 - 23:59               |
+| `second`    | 18  | 4    | `time`       | 00:00:00 - 23:59:59         |
+| `time`      | 19  | 4    | `time`       | 00:00:00.000 - 23:59:59.999 |
+
+#### List / Table
+
+| q type           | n   | size | Polars dtype               |
+| ---------------- | --- | ---- | -------------------------- |
+| `boolean list`   | 1   | 1    | `pl.Boolean`               |
+| `guid list`      | 2   | 16   | `pl.Array(pl.Binary, 16)`  |
+| `byte list`      | 4   | 1    | `pl.UInt8`                 |
+| `short list`     | 5   | 2    | `pl.Int16`                 |
+| `int list`       | 6   | 4    | `pl.Int32`                 |
+| `long list`      | 7   | 8    | `pl.Int64`                 |
+| `real list`      | 8   | 4    | `pl.Float32`               |
+| `float list`     | 9   | 8    | `pl.Float64`               |
+| `char list`      | 10  | 1    | `pl.Utf8`                  |
+| `string list`    | 10  | 1    | `pl.Utf8`                  |
+| `symbol list`    | 11  | \*   | `pl.Categorical`           |
+| `timestamp list` | 12  | 8    | `pl.Datetime("ns")`        |
+| `month list`     | 13  | 4    | `-`                        |
+| `date list`      | 14  | 4    | `pl.Date`                  |
+| `datetime list`  | 15  | 8    | `pl.Datetime("ms")`        |
+| `timespan list`  | 16  | 8    | `pl.Duration("ns")`        |
+| `minute list`    | 17  | 4    | `pl.Time`                  |
+| `second list`    | 18  | 4    | `pl.Time`                  |
+| `time list`      | 19  | 4    | `pl.Time`                  |
+| `table`          | 98  | \*   | `pl.DataFrame`             |
+| `dictionary`     | 99  | \*   | `-`                        |
+| `keyed table`    | 99  | \*   | `pl.DataFrame`             |
+
+> Guid is deserialized as a 16-byte fixed binary array. Use `.hex()` to convert to string if needed:
+>
+> ```python
+> df.with_columns(pl.col("uuid").apply(lambda u: u.hex()))
+> ```
+
+> `real`/`float` `0n` is mapped to Polars `null`, not `NaN`.
+
+> `short`/`int`/`long` null and infinity values (`0Nh/i/j`, `0Wh/i/j`, `-0Wh/i/j`) are mapped to `null`.
+
+### Serialization (Python → q)
+
+#### Basic Data Type
+
+| Python type  | q type      | Note                        |
+| ------------ | ----------- | --------------------------- |
+| `bool`       | `boolean`   |                             |
+| `int`        | `long`      |                             |
+| `float`      | `float`     |                             |
+| `str`        | `symbol`    |                             |
+| `bytes`      | `string`    |                             |
+| `datetime`   | `timestamp` |                             |
+| `date`       | `date`      | 0001.01.01 - 9999.12.31     |
+| `timedelta`  | `timespan`  |                             |
+| `time`       | `time`      | 00:00:00.000 - 23:59:59.999 |
+
+#### Series, DataFrame, and Dictionary
+
+| Polars dtype               | q type    |
+| -------------------------- | --------- |
+| `dict`                     | dict      |
+| `pl.Boolean`               | boolean   |
+| `pl.Array(pl.Binary, 16)`  | guid      |
+| `pl.UInt8`                 | byte      |
+| `pl.Int16`                 | short     |
+| `pl.Int32`                 | int       |
+| `pl.Int64`                 | long      |
+| `pl.Float32`               | real      |
+| `pl.Float64`               | float     |
+| `pl.Utf8`                  | char      |
+| `pl.Categorical`           | symbol    |
+| `pl.Datetime`              | timestamp |
+| `pl.Date`                  | date      |
+| `pl.Duration`              | timespan  |
+| `pl.Time`                  | time      |
+| `pl.DataFrame`             | table     |
+
+> Dictionary serialization requires `str` keys.
+
+## Polars Documentation
+
+- [User Guide](https://docs.pola.rs/)
+- [API Reference](https://docs.pola.rs/api/python/stable/reference/index.html)
