@@ -22,6 +22,10 @@ tasks:
     cmds:
       - cargo test
 
+  build-python:
+    cmds:
+      - maturin develop --manifest-path py-kola/Cargo.toml
+
   install-python:
     deps:
       - release-python
@@ -29,6 +33,8 @@ tasks:
       - uv pip install dist/*
 
   test-python:
+    deps:
+      - build-python
     dir: py-kola
     cmds:
       - pytest -vv

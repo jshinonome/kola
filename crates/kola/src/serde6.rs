@@ -1469,8 +1469,6 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
         }
         PolarsDataType::Datetime(unit, _) => {
             k_size = 8;
-            vec.write_all(&[12, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
             let chunks = chunks.i64().unwrap();
             let chunks = if chunks.null_count() > 0 {
@@ -1478,35 +1476,71 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             } else {
                 chunks.clone()
             };
-            chunks.chunks().iter().for_each(|array| {
-                let buffer = unsafe {
-                    array
-                        .as_any()
-                        .downcast_ref::<PrimitiveArray<i64>>()
-                        .unwrap_unchecked()
-                        .values()
-                };
-                let multplier = match unit {
-                    PolarTimeUnit::Nanoseconds => 1,
-                    PolarTimeUnit::Microseconds => 1000,
-                    PolarTimeUnit::Milliseconds => 1000000,
-                };
-                let array: Vec<i64> = buffer
-                    .as_slice()
-                    .iter()
-                    .map(|d| {
-                        if *d == i64::MIN {
-                            *d
-                        } else {
-                            d.saturating_mul(multplier).saturating_sub(NANOS_DIFF)
-                        }
+            match unit {
+                PolarTimeUnit::Milliseconds => {
+                    // serialize as kdb datetime (type 15, f64 fractional days since 2000.01.01)
+                    vec.write_all(&[15, 0]).unwrap();
+                    vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+                    chunks.chunks().iter().for_each(|array| {
+                        let buffer = unsafe {
+                            array
+                                .as_any()
+                                .downcast_ref::<PrimitiveArray<i64>>()
+                                .unwrap_unchecked()
+                                .values()
+                        };
+                        let array: Vec<f64> = buffer
+                            .as_slice()
+                            .iter()
+                            .map(|d| {
+                                if *d == i64::MIN {
+                                    f64::NAN
+                                } else {
+                                    *d as f64 / MS_PER_DAY - 10957.0
+                                }
+                            })
+                            .collect();
+                        let v8 = unsafe {
+                            core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                        };
+                        vec.write_all(v8).unwrap();
                     })
-                    .collect();
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
-                vec.write_all(v8).unwrap();
-            })
+                }
+                _ => {
+                    // serialize as kdb timestamp (type 12, i64 nanoseconds)
+                    vec.write_all(&[12, 0]).unwrap();
+                    vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+                    let multiplier = match unit {
+                        PolarTimeUnit::Nanoseconds => 1,
+                        PolarTimeUnit::Microseconds => 1000,
+                        PolarTimeUnit::Milliseconds => unreachable!(),
+                    };
+                    chunks.chunks().iter().for_each(|array| {
+                        let buffer = unsafe {
+                            array
+                                .as_any()
+                                .downcast_ref::<PrimitiveArray<i64>>()
+                                .unwrap_unchecked()
+                                .values()
+                        };
+                        let array: Vec<i64> = buffer
+                            .as_slice()
+                            .iter()
+                            .map(|d| {
+                                if *d == i64::MIN {
+                                    *d
+                                } else {
+                                    d.saturating_mul(multiplier).saturating_sub(NANOS_DIFF)
+                                }
+                            })
+                            .collect();
+                        let v8 = unsafe {
+                            core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
+                        };
+                        vec.write_all(v8).unwrap();
+                    })
+                }
+            }
         }
         PolarsDataType::Duration(_) => {
             k_size = 8;

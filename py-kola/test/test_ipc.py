@@ -400,6 +400,15 @@ def test_write_atom(q, k_atom, py_atom):
             "0n 00:00:00.000 12:34:56.789t",
             pl.Series("time", [None, 0, 45296789000000], pl.Time),
         ),
+        # datetime(ms) -> kdb datetime
+        (
+            "0n 2022.06.03T00:00:00.000 2022.06.03T12:34:56.789z",
+            pl.Series(
+                "datetime",
+                [None, datetime(2022, 6, 3), datetime(2022, 6, 3, 12, 34, 56, 789000)],
+                pl.Datetime("ms"),
+            ),
+        ),
     ],
 )
 def test_write_list(q, k_list, py_list):
