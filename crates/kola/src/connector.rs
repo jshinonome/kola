@@ -345,3 +345,28 @@ impl Connector {
         self.send(MsgType::Async, expr, args)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustls::client::danger::ServerCertVerifier;
+
+    #[test]
+    fn tls_client_config_builds_without_panic() {
+        let _config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("failed to set protocol versions")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
+        .with_no_client_auth();
+    }
+
+    #[test]
+    fn no_cert_verifier_returns_supported_schemes() {
+        let verifier = NoCertVerifier;
+        let schemes = verifier.supported_verify_schemes();
+        assert!(!schemes.is_empty(), "should return at least one scheme");
+    }
+}
