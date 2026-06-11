@@ -285,10 +285,14 @@ impl Connector {
             }
 
             if self.enable_tls {
-                let config = rustls::ClientConfig::builder()
-                    .dangerous()
-                    .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
-                    .with_no_client_auth();
+                let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+                    rustls::crypto::ring::default_provider(),
+                ))
+                .with_safe_default_protocol_versions()
+                .map_err(|e| KolaError::Err(e.to_string()))?
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
+                .with_no_client_auth();
                 let server_name = ServerName::try_from(self.host.as_str())
                     .unwrap_or_else(|_| {
                         let ip: std::net::IpAddr = self.host.parse().expect("invalid host");

@@ -4,7 +4,7 @@ members = ["crates/*", "py-kola"]
 default-members = ["crates/*"]
 
 [workspace.package]
-version = "2.3.2"
+version = "2.3.3"
 authors = ["Jo Shinonome <jo.shinonome@gmail.com>"]
 edition = "2021"
 repository = "https://github.com/jshinonome/kola"
