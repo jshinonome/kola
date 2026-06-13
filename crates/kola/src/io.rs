@@ -142,7 +142,8 @@ mod tests {
         .unwrap();
         let qty = Series::new("qty".into(), [1i64, 1].as_ref());
         let price = Series::new("price".into(), [1.0f64, 1.0].as_ref());
-        let expect = DataFrame::new(vec![sym.into(), qty.into(), price.into()]).unwrap();
+        let expect =
+            DataFrame::new_infer_height(vec![sym.into(), qty.into(), price.into()]).unwrap();
         assert_eq!(df, expect);
     }
 }

@@ -10,11 +10,11 @@ use polars_arrow::array::{
     Utf8ViewArray,
 };
 use polars_arrow::bitmap::Bitmap;
-use polars_arrow::buffer::Buffer;
 use polars_arrow::datatypes::{ArrowDataType, Field, TimeUnit};
 use polars_arrow::legacy::kernels::set::set_at_nulls;
 use polars_arrow::types::NativeType;
 use polars_arrow::{array::Utf8Array, offset::OffsetsBuffer};
+use polars_buffer::Buffer;
 use rayon::iter::IntoParallelIterator;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::cmp::min;
@@ -236,7 +236,9 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
             if vec[*pos] == 98 {
                 let mut key_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
                 let value_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
-                unsafe { key_df.hstack_mut_unchecked(value_df.get_columns()) };
+                key_df = key_df
+                    .hstack(value_df.columns())
+                    .map_err(|e| KolaError::Err(e.to_string()))?;
                 Ok(K::DataFrame(key_df))
             } else if vec[*pos] == 11 {
                 *pos += 1;
@@ -304,11 +306,12 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                 .zip(k_types.clone())
                 .map(|(v, t)| deserialize_series(v, t, true).unwrap().try_into().unwrap())
                 .collect();
-            columns.iter_mut().zip(symbols).for_each(|(c, n)| {
+            columns.iter_mut().zip(symbols.iter()).for_each(|(c, n)| {
                 c.rename(n.unwrap_or("").into());
             });
             Ok(K::DataFrame(
-                DataFrame::new(columns.into_iter().map(|c| c.into()).collect()).unwrap(),
+                DataFrame::new_infer_height(columns.into_iter().map(|c| c.into()).collect())
+                    .unwrap(),
             ))
         }
         101 => {
@@ -1174,7 +1177,7 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
                 vec.write_all(&[0]).unwrap();
             });
             vec.write_all(&[0, 0]).unwrap();
-            let columns = k.get_columns();
+            let columns = k.columns();
             vec.write_all(&column_count.to_le_bytes()).unwrap();
             let vectors = columns
                 .into_par_iter()
@@ -2579,7 +2582,8 @@ mod tests {
             K::Symbol("upd".to_owned()),
             K::Symbol("t".to_owned()),
             K::DataFrame(
-                DataFrame::new(vec![Series::new("a".into(), [1i64].as_ref()).into()]).unwrap(),
+                DataFrame::new_infer_height(vec![Series::new("a".into(), [1i64].as_ref()).into()])
+                    .unwrap(),
             ),
         ]);
         assert_eq!(k, expect);
@@ -2597,7 +2601,7 @@ mod tests {
         let df: DataFrame = k.try_into().unwrap();
         let s0 = Series::new("a".into(), [1i64].as_ref());
         let s1 = Series::new("b".into(), [1.0f64].as_ref());
-        let expect = DataFrame::new(vec![s0.into(), s1.into()]).unwrap();
+        let expect = DataFrame::new_infer_height(vec![s0.into(), s1.into()]).unwrap();
         assert_eq!(df, expect);
         assert_eq!(vec, serialize(&K::DataFrame(expect)).unwrap());
     }
@@ -2614,7 +2618,7 @@ mod tests {
         let df: DataFrame = k.try_into().unwrap();
         let s0 = Series::new("a".into(), [1i64].as_ref());
         let s1 = Series::new("b".into(), [1.0f64].as_ref());
-        let expect = DataFrame::new(vec![s0.into(), s1.into()]).unwrap();
+        let expect = DataFrame::new_infer_height(vec![s0.into(), s1.into()]).unwrap();
         assert_eq!(df, expect);
     }
 

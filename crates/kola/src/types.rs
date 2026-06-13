@@ -74,7 +74,7 @@ impl K {
             K::DataFrame(df) => {
                 // 98 0 99 + symbol list(6) + values(6)
                 let mut length: usize = 15;
-                for column in df.get_columns().iter() {
+                for column in df.columns().iter() {
                     length += column.name().len() + 1;
                     length += get_series_len(column.as_materialized_series())?
                 }
@@ -260,7 +260,7 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
         }
         PolarsDataType::Binary => {
             let array = series.binary().unwrap();
-            let is_16_fixed_binary = array.into_iter().any(|v| 16 == v.unwrap_or(&[]).len());
+            let is_16_fixed_binary = array.iter().any(|v| 16 == v.unwrap_or(&[]).len());
             if is_16_fixed_binary {
                 Ok(16 * length + 6)
             } else {

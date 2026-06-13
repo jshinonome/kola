@@ -212,7 +212,7 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
         let value = any.extract::<&str>()?;
         Ok(K::Symbol(value.to_string()))
     } else if any.is_instance_of::<PyBytes>() {
-        let value = any.downcast::<PyBytes>()?;
+        let value = any.cast::<PyBytes>()?;
         Ok(K::String(String::from_utf8(value.as_bytes().to_vec())?))
     } else if any.hasattr(intern!(any.py(), "_s"))? {
         let series = any.extract::<PySeries>()?.into();
@@ -223,19 +223,19 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
     } else if any.is_none() {
         Ok(K::Null)
     } else if any.is_instance_of::<PyDateTime>() {
-        let py_datetime = any.downcast::<PyDateTime>()?;
+        let py_datetime = any.cast::<PyDateTime>()?;
         Ok(K::DateTime(py_datetime.extract()?))
     } else if any.is_instance_of::<PyDate>() {
-        let py_date = any.downcast::<PyDate>()?;
+        let py_date = any.cast::<PyDate>()?;
         Ok(K::Date(py_date.extract()?))
     } else if any.is_instance_of::<PyTime>() {
-        let py_time = any.downcast::<PyTime>()?;
+        let py_time = any.cast::<PyTime>()?;
         Ok(K::Time(py_time.extract()?))
     } else if any.is_instance_of::<PyDelta>() {
-        let py_delta = any.downcast::<PyDelta>()?;
+        let py_delta = any.cast::<PyDelta>()?;
         Ok(K::Duration(py_delta.extract()?))
     } else if any.is_instance_of::<PyDict>() {
-        let py_dict = any.downcast::<PyDict>()?;
+        let py_dict = any.cast::<PyDict>()?;
         let mut dict = IndexMap::with_capacity(py_dict.len());
         for (k, v) in py_dict.into_iter() {
             let k = match k.extract::<&str>() {
@@ -251,7 +251,7 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
         }
         Ok(K::Dict(dict))
     } else if any.is_instance_of::<PyList>() {
-        let py_list = any.downcast::<PyList>()?;
+        let py_list = any.cast::<PyList>()?;
         let mut k_list = Vec::with_capacity(py_list.len());
         for py_any in py_list {
             k_list.push(cast_to_k(py_any)?);
