@@ -93,7 +93,7 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<Py<PyAny>> {
             let mut days = k.num_days_from_ce() as i64 - 719163;
             days = min(days, 2932532);
             days = max(days, -719162);
-            let date = PyDate::from_timestamp(py, 86400 * days)?;
+            let date = PyDate::from_timestamp(py, 86400.0 * days as f64)?;
             date.into_py_any(py)
         }
         K::Time(k) => {
