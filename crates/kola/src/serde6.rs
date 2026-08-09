@@ -115,7 +115,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                 }
                 *pos = eod_pos + 1;
                 Ok(K::Symbol(
-                    String::from_utf8(vec[start_pos..eod_pos].to_vec()).unwrap(),
+                    String::from_utf8_lossy(&vec[start_pos..eod_pos]).into_owned(),
                 ))
             }
             // timestamp
@@ -573,19 +573,23 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             let mut start_pos = pos;
             while i < length {
                 if vec[pos] == 0 {
-                    v8.write_all(&vec[start_pos..pos]).unwrap();
-                    offsets[i + 1] = offsets[i] + (pos - start_pos) as i64;
+                    let s = String::from_utf8_lossy(&vec[start_pos..pos]);
+                    v8.write_all(s.as_bytes()).unwrap();
+                    offsets[i + 1] = offsets[i] + s.len() as i64;
                     start_pos = pos + 1;
                     i += 1;
                 }
                 pos += 1;
             }
-            array_box = Utf8Array::<i64>::new(
-                ArrowDataType::LargeUtf8,
-                OffsetsBuffer::try_from(offsets).unwrap(),
-                Buffer::from(v8),
-                None,
-            )
+            // SAFETY: values are UTF-8 via from_utf8_lossy above
+            array_box = unsafe {
+                Utf8Array::<i64>::new_unchecked(
+                    ArrowDataType::LargeUtf8,
+                    OffsetsBuffer::try_from(offsets).unwrap(),
+                    Buffer::from(v8),
+                    None,
+                )
+            }
             .boxed();
             series = Series::from_arrow(name.into(), array_box).unwrap();
             if as_column {
@@ -780,17 +784,21 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
                     k += 1;
                 }
                 // exclude last 0x00, as sym ends with 0x00
-                v8.write_all(&vec[pos..pos + k]).unwrap();
-                sub_offsets.push(sub_offsets.last().unwrap() + k as i64);
+                let s = String::from_utf8_lossy(&vec[pos..pos + k]);
+                v8.write_all(s.as_bytes()).unwrap();
+                sub_offsets.push(sub_offsets.last().unwrap() + s.len() as i64);
                 pos += k + 1;
             }
         }
-        let array_box = Utf8Array::<i64>::new(
-            ArrowDataType::LargeUtf8,
-            OffsetsBuffer::try_from(sub_offsets).unwrap(),
-            Buffer::from(v8),
-            None,
-        )
+        // SAFETY: values are UTF-8 via from_utf8_lossy above
+        let array_box = unsafe {
+            Utf8Array::<i64>::new_unchecked(
+                ArrowDataType::LargeUtf8,
+                OffsetsBuffer::try_from(sub_offsets).unwrap(),
+                Buffer::from(v8),
+                None,
+            )
+        }
         .boxed();
 
         let field = create_field(k_type, "symbol").unwrap();
