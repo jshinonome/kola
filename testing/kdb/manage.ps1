@@ -2,7 +2,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet("build", "start", "stop", "test", "benchmark")]
+    [ValidateSet("build", "start", "stop", "test", "benchmark", "test-node", "benchmark-node")]
     [string] $Action = "start",
     [ValidateRange(1, 2000000)]
     [int] $Rows = 10000,
@@ -13,8 +13,12 @@ param(
     [string] $Output
 )
 
-if ($Action -eq "benchmark" -and -not $PSBoundParameters.ContainsKey("Rows")) {
+if (($Action -eq "benchmark" -or $Action -eq "benchmark-node") -and -not $PSBoundParameters.ContainsKey("Rows")) {
     $Rows = 100000
+}
+
+if ($Action -eq "benchmark-node" -and -not $PSBoundParameters.ContainsKey("Iterations")) {
+    $Iterations = 100
 }
 
 $ErrorActionPreference = "Stop"
@@ -92,12 +96,55 @@ function Build-KdbImage {
     Import-KdbEnvironment "KX_BEARER_TOKEN", "KDB_LICENSE_B64"
     Assert-KdbEnvironment "KX_BEARER_TOKEN", "KDB_LICENSE_B64"
 
-    $tokenFile = $null
-    $licenseFile = $null
+    $secretDirectory = $null
     $buildFailure = $null
     try {
-        $tokenFile = [IO.Path]::GetTempFileName()
-        $licenseFile = [IO.Path]::GetTempFileName()
+        $candidateDirectory = Join-Path ([IO.Path]::GetTempPath()) (
+            "kola-kdb-" + [Guid]::NewGuid().ToString("N")
+        )
+        New-Item -ItemType Directory -Path $candidateDirectory -ErrorAction Stop | Out-Null
+        $secretDirectory = $candidateDirectory
+
+        $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $inheritanceFlags = [Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
+        $secretAcl = [Security.AccessControl.DirectorySecurity]::new()
+        $secretAcl.SetOwner($currentSid)
+        $secretAcl.SetAccessRuleProtection($true, $false)
+        $secretAcl.AddAccessRule(
+            [Security.AccessControl.FileSystemAccessRule]::new(
+                $currentSid,
+                [Security.AccessControl.FileSystemRights]::FullControl,
+                $inheritanceFlags,
+                [Security.AccessControl.PropagationFlags]::None,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+        )
+        Set-Acl -LiteralPath $secretDirectory -AclObject $secretAcl -ErrorAction Stop
+
+        $appliedAcl = Get-Acl -LiteralPath $secretDirectory -ErrorAction Stop
+        $appliedRules = @(
+            $appliedAcl.GetAccessRules(
+                $true,
+                $true,
+                [Security.Principal.SecurityIdentifier]
+            )
+        )
+        if (
+            -not $appliedAcl.AreAccessRulesProtected -or
+            $appliedAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $currentSid.Value -or
+            $appliedRules.Count -ne 1 -or
+            $appliedRules[0].IdentityReference.Value -ne $currentSid.Value -or
+            $appliedRules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+            $appliedRules[0].FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+            $appliedRules[0].InheritanceFlags -ne $inheritanceFlags -or
+            $appliedRules[0].PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None -or
+            $appliedRules[0].IsInherited
+        ) {
+            throw "Secret staging directory ACL verification failed"
+        }
+
+        $tokenFile = Join-Path $secretDirectory ("kx-token-" + [Guid]::NewGuid().ToString("N"))
+        $licenseFile = Join-Path $secretDirectory ("kdb-license-" + [Guid]::NewGuid().ToString("N"))
         [IO.File]::WriteAllText(
             $tokenFile,
             [Environment]::GetEnvironmentVariable("KX_BEARER_TOKEN", "Process")
@@ -123,18 +170,15 @@ function Build-KdbImage {
     }
 
     $cleanupFailures = @()
-    foreach ($secretFile in $tokenFile, $licenseFile) {
-        if (-not $secretFile) {
-            continue
-        }
+    if ($secretDirectory) {
         try {
-            Remove-Item -Force -ErrorAction Stop $secretFile
-            if (Test-Path $secretFile) {
-                throw "file still exists after removal"
+            Remove-Item -LiteralPath $secretDirectory -Recurse -Force -ErrorAction Stop
+            if (Test-Path -LiteralPath $secretDirectory) {
+                throw "directory still exists after removal"
             }
         }
         catch {
-            $cleanupFailures += "${secretFile}: $($_.Exception.Message)"
+            $cleanupFailures += "${secretDirectory}: $($_.Exception.Message)"
         }
     }
 
@@ -284,6 +328,81 @@ function Benchmark-KdbContainer {
     }
 }
 
+function Initialize-NodeEnvironment {
+    [Environment]::SetEnvironmentVariable("KX_BEARER_TOKEN", $null, "Process")
+    [Environment]::SetEnvironmentVariable("KDB_LICENSE_B64", $null, "Process")
+    [Environment]::SetEnvironmentVariable("KOLA_TEST_Q_EXTERNAL", "1", "Process")
+    [Environment]::SetEnvironmentVariable("KOLA_TEST_Q_HOST", "127.0.0.1", "Process")
+    [Environment]::SetEnvironmentVariable("KOLA_TEST_Q_PORT", "1801", "Process")
+    [Environment]::SetEnvironmentVariable("KOLA_Q_ROWS", "$Rows", "Process")
+
+    Push-Location (Join-Path $repoRoot "js-kola")
+    try {
+        & npm install --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install failed with exit code $LASTEXITCODE"
+        }
+
+        & npm run build:release
+        if ($LASTEXITCODE -ne 0) {
+            throw "Node release build failed with exit code $LASTEXITCODE"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+function Test-NodeKdbContainer {
+    Start-KdbContainer
+    try {
+        Initialize-NodeEnvironment
+        Push-Location (Join-Path $repoRoot "js-kola")
+        try {
+            & npm run test:live
+            if ($LASTEXITCODE -ne 0) {
+                throw "live Node tests failed with exit code $LASTEXITCODE"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    finally {
+        Stop-KdbContainer
+    }
+}
+
+function Benchmark-NodeKdbContainer {
+    Start-KdbContainer
+    try {
+        Initialize-NodeEnvironment
+        $arguments = @(
+            "run", "benchmark", "--",
+            "--rows", "$Rows",
+            "--warmups", "$Warmups",
+            "--iterations", "$Iterations"
+        )
+        if ($Output) {
+            $outputPath = [IO.Path]::GetFullPath($Output, (Get-Location).Path)
+            $arguments += "--output", $outputPath
+        }
+        Push-Location (Join-Path $repoRoot "js-kola")
+        try {
+            & npm @arguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "Node comparison benchmark failed with exit code $LASTEXITCODE"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    finally {
+        Stop-KdbContainer
+    }
+}
+
 $managedEnvironment = @(
     "KX_BEARER_TOKEN",
     "KDB_LICENSE_B64",
@@ -305,6 +424,8 @@ try {
         "stop" { Stop-KdbContainer }
         "test" { Test-KdbContainer }
         "benchmark" { Benchmark-KdbContainer }
+        "test-node" { Test-NodeKdbContainer }
+        "benchmark-node" { Benchmark-NodeKdbContainer }
     }
 }
 finally {

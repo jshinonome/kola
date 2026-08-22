@@ -1,5 +1,4 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Timelike, Utc};
-use indexmap::IndexMap;
 use polars::chunked_array::ops::ChunkFillNullValue;
 use polars::datatypes::{DataType as PolarsDataType, TimeUnit as PolarTimeUnit};
 use polars::prelude::{Categories, DataFrame};
@@ -7,7 +6,6 @@ use polars::series::{IntoSeries, Series};
 use polars_arrow::array::{
     Array, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, ListArray, PrimitiveArray, UInt8Array,
-    Utf8ViewArray,
 };
 use polars_arrow::bitmap::Bitmap;
 use polars_arrow::datatypes::{ArrowDataType, Field, TimeUnit};
@@ -20,6 +18,7 @@ use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelI
 use std::cmp::min;
 use std::io::Write;
 use std::mem::{size_of, size_of_val};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use uuid::Uuid;
 // time difference between chrono and q types
 pub const NANOS_DIFF: i64 = 946684800000000000;
@@ -49,10 +48,12 @@ const K_TYPE_NAME: [&str; 20] = [
     "time",
 ];
 
-use crate::types::get_series_len;
 use crate::{
     errors::KolaError,
-    types::{K, K_TYPE_SIZE},
+    types::{
+        get_series_len, validate_guid_series, validate_q_symbol, validate_q_time_series, K,
+        K_TYPE_SIZE, MAX_VALUE_DEPTH,
+    },
 };
 
 fn downcast_array<'a, T: 'static>(
@@ -77,7 +78,55 @@ fn q_list_length(length: i64) -> Result<[u8; 4], KolaError> {
         .map_err(|_| KolaError::OverLengthErr())
 }
 
+fn q_list_length_from_usize(length: usize) -> Result<[u8; 4], KolaError> {
+    i32::try_from(length)
+        .map(i32::to_le_bytes)
+        .map_err(|_| KolaError::OverLengthErr())
+}
+
+fn q_timestamp_nanoseconds(unix_nanoseconds: i64) -> Result<i64, KolaError> {
+    unix_nanoseconds
+        .checked_sub(NANOS_DIFF)
+        .filter(|value| *value > i64::MIN + 1 && *value < i64::MAX)
+        .ok_or_else(|| {
+            KolaError::NotAbleToSerializeErr(
+                "timestamp is outside q's representable nanosecond range".to_string(),
+            )
+        })
+}
+fn unix_timestamp_nanoseconds(q_nanoseconds: i64) -> Result<i64, KolaError> {
+    if q_nanoseconds == i64::MAX {
+        return Ok(i64::MAX);
+    }
+    q_nanoseconds.checked_add(NANOS_DIFF).ok_or_else(|| {
+        KolaError::DeserializationErr(
+            "finite q timestamp is outside the Unix nanosecond range".to_string(),
+        )
+    })
+}
+
 pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, KolaError> {
+    match catch_unwind(AssertUnwindSafe(|| {
+        deserialize_unchecked(vec, pos, is_column, 0)
+    })) {
+        Ok(result) => result,
+        Err(_) => Err(KolaError::DeserializationErr(
+            "malformed q value caused an internal parser panic".to_string(),
+        )),
+    }
+}
+
+fn deserialize_unchecked(
+    vec: &[u8],
+    pos: &mut usize,
+    is_column: bool,
+    depth: usize,
+) -> Result<K, KolaError> {
+    if depth > MAX_VALUE_DEPTH {
+        return Err(KolaError::DeserializationErr(format!(
+            "q value nesting exceeds {MAX_VALUE_DEPTH} levels"
+        )));
+    }
     let k_type = vec[*pos];
     *pos += 1;
     let start_pos = *pos;
@@ -147,7 +196,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                 let ns = if q_ns <= i64::MIN + 1 {
                     0
                 } else {
-                    q_ns.saturating_add(NANOS_DIFF)
+                    unix_timestamp_nanoseconds(q_ns)?
                 };
                 *pos += 8;
                 Ok(K::DateTime(create_datetime(ns)))
@@ -241,9 +290,20 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                         let length =
                             u32::from_le_bytes(vec[*pos..*pos + 4].try_into().unwrap()) as usize;
                         *pos += 4;
-                        let mut res = Vec::with_capacity(length);
+                        let remaining_bytes = vec.len().saturating_sub(*pos);
+                        if length > remaining_bytes / 2 {
+                            return Err(KolaError::DeserializationErr(format!(
+                                "mixed-list count {length} exceeds the available {remaining_bytes}-byte payload"
+                            )));
+                        }
+                        let mut res = Vec::new();
+                        res.try_reserve_exact(length).map_err(|error| {
+                            KolaError::DeserializationErr(format!(
+                                "unable to allocate mixed list with {length} values: {error}"
+                            ))
+                        })?;
                         for _ in 0..length {
-                            res.push(deserialize(vec, pos, false)?);
+                            res.push(deserialize_unchecked(vec, pos, false, depth + 1)?);
                         }
                         return Ok(K::MixedList(res));
                     } else {
@@ -261,8 +321,10 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
         }
         99 => {
             if vec[*pos] == 98 {
-                let mut key_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
-                let value_df: DataFrame = deserialize(vec, pos, true)?.try_into()?;
+                let mut key_df: DataFrame =
+                    deserialize_unchecked(vec, pos, true, depth + 1)?.try_into()?;
+                let value_df: DataFrame =
+                    deserialize_unchecked(vec, pos, true, depth + 1)?.try_into()?;
                 key_df = key_df
                     .hstack(value_df.columns())
                     .map_err(|e| KolaError::Err(e.to_string()))?;
@@ -270,7 +332,7 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
             } else if vec[*pos] == 11 {
                 *pos += 1;
                 let end_pos = calculate_array_end_index(vec, *pos, 11)?;
-                let keys = deserialize_series(&vec[*pos..end_pos], 11, true)?;
+                let keys: Series = deserialize_series(&vec[*pos..end_pos], 11, true)?.try_into()?;
                 *pos = end_pos;
                 if vec[end_pos] > 19 {
                     return Err(KolaError::Err(format!(
@@ -278,25 +340,38 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                         vec[end_pos]
                     )));
                 }
-                let values = deserialize(vec, pos, is_column)?;
-                let keys = Series::try_from(keys).unwrap();
-                match values {
-                    K::Series(s) => {
-                        let mut dict = IndexMap::with_capacity(keys.len());
-                        for (k, v) in keys.cat32().unwrap().iter_str().zip(s.iter()) {
-                            dict.insert(k.unwrap().to_string(), K::from_any_value(v));
-                        }
-                        Ok(K::Dict(dict))
+                let values = deserialize_unchecked(vec, pos, is_column, depth + 1)?;
+                let keys = keys
+                    .cat32()
+                    .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
+                let value_length = match &values {
+                    K::Series(series) => series.len(),
+                    K::MixedList(values) => values.len(),
+                    K::CharVector(values) => values.len(),
+                    value => {
+                        return Err(KolaError::DeserializationErr(format!(
+                            "dictionary values must be a list, got {value:?}"
+                        )))
                     }
-                    K::MixedList(l) => {
-                        let mut dict = IndexMap::with_capacity(keys.len());
-                        for (k, v) in keys.cat32().unwrap().iter_str().zip(l.into_iter()) {
-                            dict.insert(k.unwrap().to_string(), v);
-                        }
-                        Ok(K::Dict(dict))
-                    }
-                    _ => unreachable!(),
+                };
+                if keys.len() != value_length {
+                    return Err(KolaError::DeserializationErr(format!(
+                        "dictionary key/value length mismatch: {} keys and {value_length} values",
+                        keys.len()
+                    )));
                 }
+                let key_values = keys.iter_str().map(|key| key.unwrap_or("").to_owned());
+                let values = match values {
+                    K::Series(series) => series.iter().map(K::from_any_value).collect::<Vec<_>>(),
+                    K::MixedList(values) => values,
+                    K::CharVector(values) => values.into_iter().map(K::Char).collect(),
+                    _ => {
+                        return Err(KolaError::DeserializationErr(
+                            "dictionary values changed type during decoding".to_string(),
+                        ))
+                    }
+                };
+                Ok(K::Dict(key_values.zip(values).collect()))
             } else {
                 Err(KolaError::Err(format!(
                     "Only support symbol keys dictionary or keyed table, got k type {:?}",
@@ -331,15 +406,14 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
             let mut columns: Vec<Series> = vectors
                 .par_iter()
                 .zip(k_types.clone())
-                .map(|(v, t)| deserialize_series(v, t, true).unwrap().try_into().unwrap())
-                .collect();
+                .map(|(values, k_type)| deserialize_series(values, k_type, true)?.try_into())
+                .collect::<Result<Vec<_>, KolaError>>()?;
             columns.iter_mut().zip(symbols.iter()).for_each(|(c, n)| {
                 c.rename(n.unwrap_or("").into());
             });
-            Ok(K::DataFrame(
-                DataFrame::new_infer_height(columns.into_iter().map(|c| c.into()).collect())
-                    .unwrap(),
-            ))
+            DataFrame::new_infer_height(columns.into_iter().map(|c| c.into()).collect())
+                .map(K::DataFrame)
+                .map_err(|error| KolaError::DeserializationErr(error.to_string()))
         }
         101 => {
             *pos += 1;
@@ -493,7 +567,11 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
     let length = u32::from_le_bytes(vec[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
     if length == 0 {
-        return new_empty_series(k_type);
+        return if k_type == 10 && !as_column {
+            Ok(K::CharVector(Vec::new()))
+        } else {
+            new_empty_series(k_type)
+        };
     }
     let mut series: Series;
     let array_box: Box<dyn Array>;
@@ -579,6 +657,11 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
         }
         10 => {
             if as_column {
+                if array_vec.iter().any(|byte| !byte.is_ascii()) {
+                    return Err(KolaError::DeserializationErr(
+                        "q char columns require valid UTF-8".to_string(),
+                    ));
+                }
                 let offsets: Vec<i64> = (0..=length as i64).collect();
                 array_box = Utf8Array::<i64>::new(
                     ArrowDataType::LargeUtf8,
@@ -590,7 +673,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                 series = Series::from_arrow(name.into(), array_box).unwrap();
                 Ok(K::Series(series))
             } else {
-                Ok(K::String(String::from_utf8_lossy(array_vec).to_string()))
+                Ok(K::CharVector(array_vec.to_vec()))
             }
         }
         11 => {
@@ -636,10 +719,10 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             let slice = slice
                 .iter()
                 .map(|ns| match *ns {
-                    i64::MIN => *ns,
-                    _ => ns.saturating_add(NANOS_DIFF),
+                    i64::MIN => Ok(*ns),
+                    value => unix_timestamp_nanoseconds(value),
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, KolaError>>()?;
             let bitmap = Bitmap::from_iter(slice.iter().map(|s| *s != i64::MIN));
             let array = PrimitiveArray::new(
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -909,10 +992,10 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
                 let slice = slice
                     .iter()
                     .map(|ns| match *ns {
-                        i64::MIN => *ns,
-                        _ => ns.saturating_add(NANOS_DIFF),
+                        i64::MIN => Ok(*ns),
+                        value => unix_timestamp_nanoseconds(value),
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>, KolaError>>()?;
                 let bitmap = Bitmap::from_iter(slice.iter().map(|s| *s != i64::MIN));
                 let array = PrimitiveArray::new(
                     ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -937,6 +1020,13 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
             ))
         }
         10 => {
+            for offsets in offsets_buf.as_ref().windows(2) {
+                let start = offsets[0] as usize;
+                let end = offsets[1] as usize;
+                std::str::from_utf8(&v8[start..end]).map_err(|_| {
+                    KolaError::DeserializationErr("q char columns require valid UTF-8".to_string())
+                })?;
+            }
             let array_box = Utf8Array::<i64>::new(
                 ArrowDataType::LargeUtf8,
                 offsets_buf,
@@ -968,7 +1058,77 @@ fn create_datetime(ns: i64) -> DateTime<Utc> {
     }
 }
 
-pub fn decompress(vec: &[u8], de_vec: &mut [u8], start_pos: usize) {
+pub fn decompress(vec: &[u8], de_vec: &mut [u8], start_pos: usize) -> Result<(), KolaError> {
+    let decompressed_total_length = match start_pos {
+        4 => {
+            let prefix: [u8; 4] = vec
+                .get(..4)
+                .ok_or_else(|| {
+                    KolaError::DeserializationErr(
+                        "compressed data is missing its 4-byte length prefix".to_string(),
+                    )
+                })?
+                .try_into()
+                .map_err(|_| {
+                    KolaError::DeserializationErr(
+                        "invalid 4-byte compressed-data length prefix".to_string(),
+                    )
+                })?;
+            u64::from(u32::from_le_bytes(prefix))
+        }
+        8 => {
+            let prefix: [u8; 8] = vec
+                .get(..8)
+                .ok_or_else(|| {
+                    KolaError::DeserializationErr(
+                        "compressed data is missing its 8-byte length prefix".to_string(),
+                    )
+                })?
+                .try_into()
+                .map_err(|_| {
+                    KolaError::DeserializationErr(
+                        "invalid 8-byte compressed-data length prefix".to_string(),
+                    )
+                })?;
+            u64::from_le_bytes(prefix)
+        }
+        _ => {
+            return Err(KolaError::DeserializationErr(format!(
+                "unsupported compressed-data prefix length {start_pos}"
+            )))
+        }
+    };
+    let expected_body_length = decompressed_total_length
+        .checked_sub(8)
+        .and_then(|length| usize::try_from(length).ok())
+        .ok_or_else(|| {
+            KolaError::DeserializationErr(
+                "invalid decompressed message length in compressed-data prefix".to_string(),
+            )
+        })?;
+    if expected_body_length != de_vec.len() {
+        return Err(KolaError::DeserializationErr(format!(
+            "decompressed body length mismatch: prefix requires {expected_body_length} bytes, destination has {}",
+            de_vec.len()
+        )));
+    }
+    if !de_vec.is_empty() && vec.len() <= start_pos {
+        return Err(KolaError::DeserializationErr(
+            "compressed data ends immediately after its length prefix".to_string(),
+        ));
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| {
+        decompress_unchecked(vec, de_vec, start_pos)
+    })) {
+        Ok(()) => Ok(()),
+        Err(_) => Err(KolaError::DeserializationErr(
+            "malformed compressed data caused an internal decompressor panic".to_string(),
+        )),
+    }
+}
+
+fn decompress_unchecked(vec: &[u8], de_vec: &mut [u8], start_pos: usize) {
     let mut d_pos: usize = 0;
     // skip decompressed msg length
     let mut x_pos: usize = 4;
@@ -1102,7 +1262,11 @@ pub fn compress(vec: Vec<u8>) -> Vec<u8> {
 }
 
 pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
-    let k_length = k.j6_len()?;
+    serialize_with_depth(k, 0)
+}
+
+fn serialize_with_depth(k: &K, depth: usize) -> Result<Vec<u8>, KolaError> {
+    let k_length = k.j6_len_with_depth(depth)?;
     let mut vec: Vec<u8>;
     match k {
         K::Boolean(k) => {
@@ -1148,26 +1312,37 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             vec.write_all(&[246, *k]).unwrap();
         }
         K::Symbol(k) => {
+            validate_q_symbol(k)?;
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[245]).unwrap();
             vec.write_all(k.as_bytes()).unwrap();
             vec.write_all(&[0]).unwrap();
         }
-        K::String(k) => {
+        K::CharVector(k) => {
+            let length = q_list_length_from_usize(k.len())?;
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[10, 0]).unwrap();
-            vec.write_all(&(k.len() as u32).to_le_bytes()).unwrap();
+            vec.write_all(&length).unwrap();
+            vec.write_all(k).unwrap();
+        }
+        K::String(k) => {
+            let length = q_list_length_from_usize(k.len())?;
+            vec = Vec::with_capacity(k_length);
+            vec.write_all(&[10, 0]).unwrap();
+            vec.write_all(&length).unwrap();
             vec.write_all(k.as_bytes()).unwrap();
         }
         // to timestamp
         K::DateTime(k) => {
+            let unix_nanoseconds = k.timestamp_nanos_opt().ok_or_else(|| {
+                KolaError::NotAbleToSerializeErr(
+                    "timestamp is outside q's representable nanosecond range".to_string(),
+                )
+            })?;
+            let q_nanoseconds = q_timestamp_nanoseconds(unix_nanoseconds)?;
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[244]).unwrap();
-            let ns = match k.timestamp_nanos_opt() {
-                Some(ns) => ns.saturating_sub(NANOS_DIFF),
-                _ => i64::MIN,
-            };
-            vec.write_all(&ns.to_le_bytes()).unwrap();
+            vec.write_all(&q_nanoseconds.to_le_bytes()).unwrap();
         }
         // to date
         K::Date(k) => {
@@ -1194,9 +1369,10 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
         K::MixedList(l) => {
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[0, 0]).unwrap();
-            vec.write_all(&(l.len() as u32).to_le_bytes()).unwrap();
+            vec.write_all(&q_list_length_from_usize(l.len())?).unwrap();
             for atom in l.iter() {
-                vec.write_all(&serialize(atom)?).unwrap();
+                vec.write_all(&serialize_with_depth(atom, depth + 1)?)
+                    .unwrap();
             }
         }
         // to list
@@ -1207,28 +1383,28 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
         K::DataFrame(k) => {
             vec = Vec::with_capacity(k_length);
             let column_names = k.get_column_names();
-            let column_count = column_names.len() as i32;
+            let column_count =
+                i32::try_from(column_names.len()).map_err(|_| KolaError::OverLengthErr())?;
             vec.write_all(&[98, 0, 99, 11, 0]).unwrap();
             vec.write_all(&column_count.to_le_bytes()).unwrap();
-            column_names.into_iter().for_each(|s| {
-                vec.write_all(s.as_bytes()).unwrap();
+            for name in column_names {
+                validate_q_symbol(name)?;
+                vec.write_all(name.as_bytes()).unwrap();
                 vec.write_all(&[0]).unwrap();
-            });
+            }
             vec.write_all(&[0, 0]).unwrap();
             let columns = k.columns();
             vec.write_all(&column_count.to_le_bytes()).unwrap();
             let vectors = columns
                 .into_par_iter()
-                .map(|s| {
-                    serialize_series(
-                        s.as_materialized_series(),
-                        get_series_len(s.as_materialized_series()).unwrap(),
-                    )
+                .map(|column| {
+                    let series = column.as_materialized_series();
+                    serialize_series(series, get_series_len(series)?)
                 })
                 .collect::<Result<Vec<Vec<u8>>, KolaError>>()?;
-            vectors.into_iter().for_each(|v| {
-                vec.write_all(&v).unwrap();
-            });
+            for value in vectors {
+                vec.write_all(&value).unwrap();
+            }
         }
         // to (::)
         K::Null => {
@@ -1236,23 +1412,24 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             vec.write_all(&[101, 0]).unwrap();
         }
         K::Dict(dict) => {
-            let keys = dict.keys();
-            let length = keys.len() as i32;
+            let length = i32::try_from(dict.len()).map_err(|_| KolaError::OverLengthErr())?;
             if length == 0 {
                 return Err(KolaError::Err("Not supported empty dictionary".to_string()));
             };
             vec = Vec::with_capacity(k_length);
             vec.write_all(&[99, 11, 0]).unwrap();
             vec.write_all(&length.to_le_bytes()).unwrap();
-            keys.into_iter().for_each(|k| {
-                vec.write_all(k.as_bytes()).unwrap();
+            for key in dict.keys() {
+                validate_q_symbol(key)?;
+                vec.write_all(key.as_bytes()).unwrap();
                 vec.write_all(&[0]).unwrap();
-            });
+            }
             vec.write_all(&[0, 0]).unwrap();
             vec.write_all(&length.to_le_bytes()).unwrap();
-            dict.values().for_each(|v| {
-                vec.write_all(&serialize(v).unwrap()).unwrap();
-            });
+            for value in dict.values() {
+                vec.write_all(&serialize_with_depth(value, depth + 1)?)
+                    .unwrap();
+            }
         }
     };
     Ok(vec)
@@ -1275,41 +1452,24 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
         PolarsDataType::Boolean => {
             vec.write_all(&[1, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let ptr = series.to_physical_repr();
-            let chunks = &ptr.bool().unwrap().chunks();
-            chunks.iter().for_each(|array| {
-                let array = unsafe {
-                    array
-                        .as_any()
-                        .downcast_ref::<BooleanArray>()
-                        .unwrap_unchecked()
-                        .values()
-                };
-                array.iter().for_each(|b| {
-                    if b {
-                        vec.write_all(&[1u8]).unwrap();
-                    } else {
-                        vec.write_all(&[0u8]).unwrap();
-                    }
-                });
-            })
+            let physical = series.to_physical_repr();
+            let values = physical
+                .bool()
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            for value in values.iter() {
+                vec.write_all(&[value.unwrap_or(false) as u8]).unwrap();
+            }
         }
         PolarsDataType::UInt8 => {
             vec.write_all(&[4, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let ptr = series.to_physical_repr();
-            let chunks = &ptr.u8().unwrap().chunks();
-            chunks.iter().for_each(|array| {
-                let array = unsafe {
-                    array
-                        .as_any()
-                        .downcast_ref::<PrimitiveArray<u8>>()
-                        .unwrap_unchecked()
-                        .values()
-                };
-                let v8 = native_values_as_bytes(array.as_ref());
-                vec.write_all(v8).unwrap();
-            })
+            let physical = series.to_physical_repr();
+            let values = physical
+                .u8()
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            for value in values.iter() {
+                vec.write_all(&[value.unwrap_or(0)]).unwrap();
+            }
         }
         PolarsDataType::Int16 => {
             vec.write_all(&[5, 0]).unwrap();
@@ -1440,26 +1600,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
         PolarsDataType::String => {
             vec.write_all(&[0, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let ptr = series.to_physical_repr();
-            let array = ptr.str().unwrap();
-            array.chunks().iter().for_each(|arr| {
-                let arr = &**arr;
-                let arr = unsafe { &*(arr as *const dyn Array as *const Utf8ViewArray) };
-                arr.into_iter().for_each(|s| {
-                    vec.write_all(&[10, 0]).unwrap();
-                    match s {
-                        Some(s) => {
-                            vec.write_all(&(s.len() as u32).to_le_bytes()).unwrap();
-                            let v8 =
-                                unsafe { core::slice::from_raw_parts(s.as_ptr().cast(), s.len()) };
-                            vec.write_all(v8).unwrap();
-                        }
-                        None => {
-                            vec.write_all(&[0, 0, 0, 0]).unwrap();
-                        }
-                    }
-                });
-            });
+            let physical = series.to_physical_repr();
+            let values = physical
+                .str()
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            for value in values.iter() {
+                vec.write_all(&[10, 0]).unwrap();
+                if let Some(value) = value {
+                    vec.write_all(&q_list_length_from_usize(value.len())?)
+                        .unwrap();
+                    vec.write_all(value.as_bytes()).unwrap();
+                } else {
+                    vec.write_all(&[0, 0, 0, 0]).unwrap();
+                }
+            }
         }
         PolarsDataType::Date => {
             // max date - 95026601
@@ -1496,8 +1650,23 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             })
         }
         PolarsDataType::Datetime(unit, _) => {
-            let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
-            let chunks = chunks.i64().unwrap();
+            let physical = series.cast(&PolarsDataType::Int64).unwrap();
+            let chunks = physical.i64().unwrap();
+            let timestamp_multiplier = match unit {
+                PolarTimeUnit::Nanoseconds => Some(1i64),
+                PolarTimeUnit::Microseconds => Some(1_000i64),
+                PolarTimeUnit::Milliseconds => None,
+            };
+            if let Some(multiplier) = timestamp_multiplier {
+                for value in chunks.iter().flatten() {
+                    let unix_nanoseconds = value.checked_mul(multiplier).ok_or_else(|| {
+                        KolaError::NotAbleToSerializeErr(
+                            "timestamp is outside q's representable nanosecond range".to_string(),
+                        )
+                    })?;
+                    q_timestamp_nanoseconds(unix_nanoseconds)?;
+                }
+            }
             let chunks = if chunks.null_count() > 0 {
                 chunks.fill_null_with_values(i64::MIN).unwrap()
             } else {
@@ -1540,7 +1709,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         PolarTimeUnit::Microseconds => 1000,
                         PolarTimeUnit::Milliseconds => unreachable!(),
                     };
-                    chunks.chunks().iter().for_each(|array| {
+                    for array in chunks.chunks() {
                         let buffer = unsafe {
                             array
                                 .as_any()
@@ -1548,20 +1717,27 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                                 .unwrap_unchecked()
                                 .values()
                         };
-                        let array: Vec<i64> = buffer
+                        let array = buffer
                             .as_slice()
                             .iter()
-                            .map(|d| {
-                                if *d == i64::MIN {
-                                    *d
+                            .map(|value| {
+                                if *value == i64::MIN {
+                                    Ok(i64::MIN)
                                 } else {
-                                    d.saturating_mul(multiplier).saturating_sub(NANOS_DIFF)
+                                    let unix_nanoseconds =
+                                        value.checked_mul(multiplier).ok_or_else(|| {
+                                            KolaError::NotAbleToSerializeErr(
+                                                "timestamp is outside q's representable nanosecond range"
+                                                    .to_string(),
+                                            )
+                                        })?;
+                                    q_timestamp_nanoseconds(unix_nanoseconds)
                                 }
                             })
-                            .collect();
+                            .collect::<Result<Vec<_>, KolaError>>()?;
                         let v8 = native_values_as_bytes(array.as_ref());
                         vec.write_all(v8).unwrap();
-                    })
+                    }
                 }
             }
         }
@@ -1588,6 +1764,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             })
         }
         PolarsDataType::Time => {
+            validate_q_time_series(series)?;
             vec.write_all(&[19, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
@@ -1821,22 +1998,21 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             }
         }
         PolarsDataType::Categorical(_, _) => {
+            let categorical = series
+                .cat32()
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            for value in categorical.iter_str().flatten() {
+                validate_q_symbol(value)?;
+            }
             vec.write_all(&[11, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let cat = series.cat32().unwrap();
-            cat.iter_str()
-                .map(|s| {
-                    if let Some(s) = s {
-                        [s.as_bytes(), &[0u8]].concat()
-                    } else {
-                        vec![0u8]
-                    }
-                })
-                .for_each(|v| {
-                    vec.write_all(&v).unwrap();
-                });
+            for value in categorical.iter_str() {
+                vec.write_all(value.unwrap_or("").as_bytes()).unwrap();
+                vec.write_all(&[0]).unwrap();
+            }
         }
         PolarsDataType::Binary => {
+            validate_guid_series(series)?;
             vec.write_all(&[2, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let array = series.binary().unwrap();
@@ -1864,6 +2040,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
 
 #[cfg(test)]
 mod tests {
+    use crate::types::MIN_Q_TIMESTAMP_UNIX_NANOS;
     use indexmap::IndexMap;
     use polars::prelude::{CompatLevel, NamedFrom};
     use polars_arrow::{
@@ -1882,7 +2059,7 @@ mod tests {
         .to_vec();
         let length = u32::from_le_bytes(vec[0..4].try_into().unwrap());
         let mut de_vec = vec![0; (length - 8) as usize];
-        decompress(&vec, &mut de_vec, 4);
+        decompress(&vec, &mut de_vec, 4).expect("valid compressed message");
         let mut expected_vec = [1u8; 2006].to_vec();
         expected_vec[1] = 0;
         expected_vec[2] = 208;
@@ -1890,6 +2067,32 @@ mod tests {
         expected_vec[4] = 0;
         expected_vec[5] = 0;
         assert_eq!(de_vec, expected_vec);
+    }
+
+    #[test]
+    fn malformed_atom_panics_are_contained_as_deserialization_errors() {
+        assert!(matches!(
+            deserialize(&[254, 0], &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+    }
+
+    #[test]
+    fn mixed_list_count_cannot_amplify_a_tiny_frame() {
+        assert!(matches!(
+            deserialize(&[0, 0, 0xff, 0xff, 0xff, 0xff, 101, 0], &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+    }
+
+    #[test]
+    fn decompress_rejects_a_prefix_only_compressed_body() {
+        let compressed = 12u32.to_le_bytes();
+        let mut destination = [0u8; 4];
+        assert!(matches!(
+            decompress(&compressed, &mut destination, 4),
+            Err(KolaError::DeserializationErr(_))
+        ));
     }
 
     #[test]
@@ -2073,6 +2276,20 @@ mod tests {
         let series: Series = k.try_into().unwrap();
         assert_eq!(series, expect);
         assert_eq!(vec, serialize(&K::Series(expect)).unwrap());
+    }
+
+    #[test]
+    fn deserialize_and_serialize_char_vector_losslessly() {
+        let vec = [10, 0, 4, 0, 0, 0, 0, 127, 128, 255].to_vec();
+        let k = deserialize(&vec, &mut 0, false).unwrap();
+        assert_eq!(k, K::CharVector(vec![0, 127, 128, 255]));
+        assert_eq!(serialize(&k).unwrap(), vec);
+
+        let empty = [10, 0, 0, 0, 0, 0].to_vec();
+        assert_eq!(
+            deserialize(&empty, &mut 0, false).unwrap(),
+            K::CharVector(Vec::new())
+        );
     }
 
     #[test]
@@ -2663,6 +2880,14 @@ mod tests {
     }
 
     #[test]
+    fn char_vector_length_must_fit_q_list_length() {
+        assert!(matches!(
+            q_list_length_from_usize(i32::MAX as usize + 1),
+            Err(KolaError::OverLengthErr())
+        ));
+    }
+
+    #[test]
     fn serialize_timestamp() {
         let k = K::DateTime(DateTime::<Utc>::from_timestamp(0, 123456789).unwrap());
         assert_eq!(
@@ -2711,5 +2936,359 @@ mod tests {
         let k = K::Dict(dict);
         assert_eq!(deserialize(&vec, &mut 0, false).unwrap(), k);
         assert_eq!(vec, serialize(&k).unwrap());
+    }
+
+    fn assert_ipc_header_matches_body(value: K) {
+        let body_length = value.j6_len().expect("calculate body length");
+        let message = crate::io::generate_j6_ipc_msg(crate::types::MsgType::Sync, false, value)
+            .expect("generate IPC message");
+        let header_length =
+            u32::from_le_bytes(message[4..8].try_into().expect("IPC length header")) as usize;
+        assert_eq!(header_length, message.len());
+        assert_eq!(body_length + 8, message.len());
+    }
+
+    fn time_series(values: Vec<i64>, validity: Option<Bitmap>) -> Series {
+        Series::from_arrow(
+            "time".into(),
+            PrimitiveArray::new(
+                ArrowDataType::Time64(TimeUnit::Nanosecond),
+                values.into(),
+                validity,
+            )
+            .boxed(),
+        )
+        .expect("time series")
+    }
+
+    #[test]
+    fn series_and_table_lengths_match_generated_ipc_headers() {
+        let byte = Series::new("byte".into(), &[Some(7u8), None, Some(9)]);
+        let date = Series::new("date".into(), &[Some(0i32), None, Some(1)])
+            .cast(&PolarsDataType::Date)
+            .expect("date series");
+        let time = time_series(
+            vec![0, i64::MIN, 86_399_999_000_000],
+            Some(Bitmap::from([true, false, true])),
+        );
+        let long = "long string payload".repeat(8);
+        let text = Series::new("text".into(), &[Some(long.as_str()), Some(""), None]);
+
+        for series in [byte.clone(), date.clone(), time.clone(), text.clone()] {
+            assert_ipc_header_matches_body(K::Series(series));
+        }
+
+        let table = DataFrame::new_infer_height(
+            [byte, date, time, text]
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        )
+        .expect("table");
+        assert_ipc_header_matches_body(K::DataFrame(table));
+    }
+
+    #[test]
+    fn nullable_boolean_and_byte_series_use_deterministic_q_values() {
+        let boolean = Series::from_arrow(
+            "boolean".into(),
+            BooleanArray::from([Some(true), None, Some(false)]).boxed(),
+        )
+        .expect("boolean series");
+        let byte = Series::from_arrow(
+            "byte".into(),
+            UInt8Array::from([Some(7), None, Some(9)]).boxed(),
+        )
+        .expect("byte series");
+
+        let boolean_bytes = serialize(&K::Series(boolean.clone())).expect("serialize boolean");
+        let byte_bytes = serialize(&K::Series(byte.clone())).expect("serialize byte");
+        assert_eq!(boolean_bytes, [1, 0, 3, 0, 0, 0, 1, 0, 0]);
+        assert_eq!(byte_bytes, [4, 0, 3, 0, 0, 0, 7, 0, 9]);
+        assert_eq!(
+            serialize(&deserialize(&boolean_bytes, &mut 0, false).expect("deserialize boolean"))
+                .expect("reserialize boolean"),
+            boolean_bytes
+        );
+        assert_eq!(
+            serialize(&deserialize(&byte_bytes, &mut 0, false).expect("deserialize byte"))
+                .expect("reserialize byte"),
+            byte_bytes
+        );
+
+        let table = DataFrame::new_infer_height(vec![boolean.clone().into(), byte.clone().into()])
+            .expect("nullable table");
+        let table_bytes = serialize(&K::DataFrame(table.clone())).expect("serialize table");
+        assert_eq!(
+            serialize(&deserialize(&table_bytes, &mut 0, false).expect("deserialize table"))
+                .expect("reserialize table"),
+            table_bytes
+        );
+        assert_ipc_header_matches_body(K::Series(boolean));
+        assert_ipc_header_matches_body(K::Series(byte));
+        assert_ipc_header_matches_body(K::DataFrame(table));
+    }
+
+    #[test]
+    fn rejects_sub_millisecond_polars_and_scalar_times() {
+        let time = time_series(vec![1], None);
+        assert!(matches!(
+            get_series_len(&time),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+        assert!(matches!(
+            serialize_series(&time, 10),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+
+        let scalar = K::Time(NaiveTime::from_hms_nano_opt(0, 0, 0, 1).expect("time"));
+        assert!(matches!(
+            serialize(&scalar),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_mixed_width_guid_series_and_zero_fills_nulls() {
+        let exact = [7u8; 16];
+        let valid = Series::new("guid".into(), &[Some(exact.as_slice()), None]);
+        let serialized = serialize(&K::Series(valid)).expect("serialize GUIDs");
+        assert_eq!(&serialized[6..22], exact.as_slice());
+        assert_eq!(&serialized[22..38], &[0u8; 16]);
+
+        let short = [1u8; 15];
+        let malformed = Series::new(
+            "guid".into(),
+            &[Some(exact.as_slice()), Some(short.as_slice())],
+        );
+        assert!(matches!(
+            get_series_len(&malformed),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+        assert!(matches!(
+            serialize_series(&malformed, 38),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_non_utf8_q_char_columns_without_losing_top_level_bytes() {
+        let top_level = [10, 0, 1, 0, 0, 0, 0xff];
+        assert_eq!(
+            deserialize(&top_level, &mut 0, false).expect("top-level bytes"),
+            K::CharVector(vec![0xff])
+        );
+
+        let nested = [0, 0, 1, 0, 0, 0, 10, 0, 1, 0, 0, 0, 0xff];
+        assert!(matches!(
+            deserialize(&nested, &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+
+        let table = [
+            98, 0, 99, 11, 0, 1, 0, 0, 0, b'c', 0, 0, 0, 1, 0, 0, 0, 10, 0, 1, 0, 0, 0, 0xff,
+        ];
+        assert!(matches!(
+            deserialize(&table, &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+    }
+
+    #[test]
+    fn table_column_failures_are_propagated() {
+        let table = [
+            98, 0, 99, 11, 0, 1, 0, 0, 0, b'x', 0, 0, 0, 1, 0, 0, 0, 13, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        assert!(matches!(
+            deserialize(&table, &mut 0, false),
+            Err(KolaError::NotSupportedKListErr(13))
+        ));
+    }
+
+    #[test]
+    fn bounds_mixed_list_and_dictionary_deserialization_depth() {
+        let mut mixed = vec![101, 0];
+        for _ in 0..=MAX_VALUE_DEPTH {
+            let mut outer = vec![0, 0, 1, 0, 0, 0];
+            outer.extend(mixed);
+            mixed = outer;
+        }
+        assert!(matches!(
+            deserialize(&mixed, &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+
+        let mut dictionary = vec![101, 0];
+        for _ in 0..=MAX_VALUE_DEPTH / 2 {
+            let mut outer = vec![99, 11, 0, 1, 0, 0, 0, b'k', 0, 0, 0, 1, 0, 0, 0];
+            outer.extend(dictionary);
+            dictionary = outer;
+        }
+        assert!(matches!(
+            deserialize(&dictionary, &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+    }
+
+    #[test]
+    fn sizing_and_serialization_reject_sixty_five_nested_values() {
+        fn nested_mixed(depth: usize) -> K {
+            (0..depth).fold(K::Null, |value, _| K::MixedList(vec![value]))
+        }
+
+        fn nested_dict(depth: usize) -> K {
+            (0..depth).fold(K::Null, |value, _| {
+                K::Dict(IndexMap::from([("k".to_string(), value)]))
+            })
+        }
+
+        assert!(serialize(&nested_mixed(MAX_VALUE_DEPTH)).is_ok());
+        assert!(serialize(&nested_dict(MAX_VALUE_DEPTH)).is_ok());
+
+        for value in [
+            nested_mixed(MAX_VALUE_DEPTH + 1),
+            nested_dict(MAX_VALUE_DEPTH + 1),
+        ] {
+            assert!(matches!(
+                value.j6_len(),
+                Err(KolaError::NotAbleToSerializeErr(_))
+            ));
+            assert!(matches!(
+                serialize(&value),
+                Err(KolaError::NotAbleToSerializeErr(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn decodes_char_and_guid_dictionary_values_without_truncation() {
+        let chars = [
+            99, 11, 0, 2, 0, 0, 0, b'a', 0, b'b', 0, 10, 0, 2, 0, 0, 0, b'x', b'y',
+        ];
+        let mut expected_chars = IndexMap::new();
+        expected_chars.insert("a".to_string(), K::Char(b'x'));
+        expected_chars.insert("b".to_string(), K::Char(b'y'));
+        assert_eq!(
+            deserialize(&chars, &mut 0, false).expect("char dictionary"),
+            K::Dict(expected_chars)
+        );
+
+        let first = [1u8; 16];
+        let second = [2u8; 16];
+        let mut guids = vec![99, 11, 0, 2, 0, 0, 0, b'a', 0, b'b', 0, 2, 0, 2, 0, 0, 0];
+        guids.extend(first);
+        guids.extend(second);
+        let mut expected_guids = IndexMap::new();
+        expected_guids.insert("a".to_string(), K::Guid(Uuid::from_bytes(first)));
+        expected_guids.insert("b".to_string(), K::Guid(Uuid::from_bytes(second)));
+        assert_eq!(
+            deserialize(&guids, &mut 0, false).expect("GUID dictionary"),
+            K::Dict(expected_guids)
+        );
+
+        let mismatched = [
+            99, 11, 0, 2, 0, 0, 0, b'a', 0, b'b', 0, 10, 0, 1, 0, 0, 0, b'x',
+        ];
+        assert!(matches!(
+            deserialize(&mismatched, &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_nul_symbols_and_dictionary_keys_during_serialization() {
+        assert!(matches!(
+            serialize(&K::Symbol("bad\0symbol".to_string())),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+        let dictionary = K::Dict(IndexMap::from([("bad\0key".to_string(), K::I64(1))]));
+        assert!(matches!(
+            serialize(&dictionary),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+
+        let nested_empty_dictionary = K::Dict(IndexMap::from([(
+            "nested".to_string(),
+            K::Dict(IndexMap::new()),
+        )]));
+        assert!(serialize(&nested_empty_dictionary).is_err());
+
+        let categorical = Series::new("symbol".into(), &["ok", "bad\0symbol"])
+            .cast(&PolarsDataType::Categorical(
+                Categories::global(),
+                Categories::global().mapping(),
+            ))
+            .expect("categorical series");
+        assert!(matches!(
+            serialize(&K::Series(categorical)),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+    }
+
+    #[test]
+    fn timestamp_encoding_is_exact_at_q_boundaries() {
+        let values = [MIN_Q_TIMESTAMP_UNIX_NANOS, -1, i64::MAX];
+        for unix_nanoseconds in values {
+            let timestamp = DateTime::from_timestamp(
+                unix_nanoseconds.div_euclid(1_000_000_000),
+                unix_nanoseconds.rem_euclid(1_000_000_000) as u32,
+            )
+            .expect("timestamp");
+            let serialized = serialize(&K::DateTime(timestamp)).expect("serialize timestamp");
+            let raw = i64::from_le_bytes(serialized[1..9].try_into().expect("q timestamp payload"));
+            assert_eq!(raw, unix_nanoseconds - NANOS_DIFF);
+            assert_eq!(
+                deserialize(&serialized, &mut 0, false).expect("deserialize timestamp"),
+                K::DateTime(timestamp)
+            );
+        }
+
+        let below = MIN_Q_TIMESTAMP_UNIX_NANOS - 1;
+        let below = DateTime::from_timestamp(
+            below.div_euclid(1_000_000_000),
+            below.rem_euclid(1_000_000_000) as u32,
+        )
+        .expect("timestamp below q range");
+        assert!(matches!(
+            serialize(&K::DateTime(below)),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+
+        let below_series = Series::from_arrow(
+            "timestamp".into(),
+            PrimitiveArray::new(
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                vec![MIN_Q_TIMESTAMP_UNIX_NANOS - 1].into(),
+                None,
+            )
+            .boxed(),
+        )
+        .expect("timestamp series");
+        assert!(matches!(
+            serialize(&K::Series(below_series)),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+
+        let above = DateTime::from_timestamp(i64::MAX.div_euclid(1_000_000_000) + 1, 0)
+            .expect("timestamp above q range");
+        assert!(matches!(
+            serialize(&K::DateTime(above)),
+            Err(KolaError::NotAbleToSerializeErr(_))
+        ));
+
+        let first_unrepresentable_q_timestamp = i64::MAX - NANOS_DIFF + 1;
+        let mut atom = vec![244];
+        atom.extend_from_slice(&first_unrepresentable_q_timestamp.to_le_bytes());
+        assert!(matches!(
+            deserialize(&atom, &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+
+        let mut list = vec![12, 0, 1, 0, 0, 0];
+        list.extend_from_slice(&first_unrepresentable_q_timestamp.to_le_bytes());
+        assert!(matches!(
+            deserialize(&list, &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
     }
 }

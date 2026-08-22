@@ -1,17 +1,17 @@
-use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Timelike, Utc};
 use indexmap::IndexMap;
 use polars::{
     datatypes::DataType as PolarsDataType,
     prelude::{AnyValue, DataFrame, LargeListArray, TimeUnit},
     series::Series,
 };
-use polars_arrow::array::ValueSize;
-use rayon::iter::ParallelIterator;
 use uuid::Uuid;
 
 use crate::errors::KolaError;
 
 pub const K_TYPE_SIZE: [usize; 20] = [0, 1, 16, 0, 1, 2, 4, 8, 4, 8, 1, 0, 8, 4, 4, 8, 8, 4, 4, 4];
+pub const MIN_Q_TIMESTAMP_UNIX_NANOS: i64 = i64::MIN + 946_684_800_000_000_000 + 2;
+pub(crate) const MAX_VALUE_DEPTH: usize = 64;
 
 #[repr(u8)]
 pub enum MsgType {
@@ -31,6 +31,7 @@ pub enum K {
     F32(f32),
     F64(f64),
     Char(u8),
+    CharVector(Vec<u8>),
     Symbol(String),
     String(String),
     DateTime(DateTime<Utc>),   // datetime, timestamp
@@ -46,6 +47,16 @@ pub enum K {
 
 impl K {
     pub fn j6_len(&self) -> Result<usize, KolaError> {
+        self.j6_len_with_depth(0)
+    }
+
+    pub(crate) fn j6_len_with_depth(&self, depth: usize) -> Result<usize, KolaError> {
+        if depth > MAX_VALUE_DEPTH {
+            return Err(KolaError::NotAbleToSerializeErr(format!(
+                "q value nesting exceeds {MAX_VALUE_DEPTH} levels"
+            )));
+        }
+
         // k type + value
         match self {
             K::Boolean(_) => Ok(2),
@@ -57,35 +68,55 @@ impl K {
             K::F32(_) => Ok(5),
             K::F64(_) => Ok(9),
             K::Char(_) => Ok(2),
-            K::Symbol(k) => Ok(k.len() + 2),
-            K::String(k) => Ok(k.len() + 6),
+            K::CharVector(k) => k.len().checked_add(6).ok_or(KolaError::OverLengthErr()),
+            K::Symbol(k) => {
+                validate_q_symbol(k)?;
+                k.len().checked_add(2).ok_or(KolaError::OverLengthErr())
+            }
+            K::String(k) => k.len().checked_add(6).ok_or(KolaError::OverLengthErr()),
             K::DateTime(_) => Ok(9),
             K::Date(_) => Ok(5),
-            K::Time(_) => Ok(5),
-            K::Duration(_) => Ok(9),
-            K::MixedList(l) => {
-                let lens = l
-                    .iter()
-                    .map(|k| k.j6_len())
-                    .collect::<Result<Vec<_>, KolaError>>();
-                Ok(lens?.into_iter().sum::<usize>() + 6)
+            K::Time(k) => {
+                if k.nanosecond() % 1_000_000 != 0 {
+                    return Err(KolaError::NotAbleToSerializeErr(
+                        "q time only supports millisecond precision".to_string(),
+                    ));
+                }
+                Ok(5)
             }
+            K::Duration(_) => Ok(9),
+            K::MixedList(values) => values.iter().try_fold(6usize, |length, value| {
+                length
+                    .checked_add(value.j6_len_with_depth(depth + 1)?)
+                    .ok_or(KolaError::OverLengthErr())
+            }),
             K::Series(series) => get_series_len(series),
             K::DataFrame(df) => {
                 // 98 0 99 + symbol list(6) + values(6)
                 let mut length: usize = 15;
-                for column in df.columns().iter() {
-                    length += column.name().len() + 1;
-                    length += get_series_len(column.as_materialized_series())?
+                for column in df.columns() {
+                    length = length
+                        .checked_add(column.name().len())
+                        .and_then(|length| length.checked_add(1))
+                        .ok_or(KolaError::OverLengthErr())?;
+                    length = length
+                        .checked_add(get_series_len(column.as_materialized_series())?)
+                        .ok_or(KolaError::OverLengthErr())?;
                 }
                 Ok(length)
             }
             K::Null => Ok(2),
             K::Dict(dict) => {
-                let mut length = 13;
-                for (k, v) in dict.iter() {
-                    length += k.len() + 1;
-                    length += v.j6_len()?;
+                let mut length = 13usize;
+                for (key, value) in dict {
+                    validate_q_symbol(key)?;
+                    length = length
+                        .checked_add(key.len())
+                        .and_then(|length| length.checked_add(1))
+                        .ok_or(KolaError::OverLengthErr())?;
+                    length = length
+                        .checked_add(value.j6_len_with_depth(depth + 1)?)
+                        .ok_or(KolaError::OverLengthErr())?;
                 }
                 Ok(length)
             }
@@ -102,6 +133,14 @@ impl K {
             AnyValue::Int64(v) => K::I64(v),
             AnyValue::Float32(v) => K::F32(v),
             AnyValue::Float64(v) => K::F64(v),
+            AnyValue::Binary(value) => <[u8; 16]>::try_from(value)
+                .map(Uuid::from_bytes)
+                .map(K::Guid)
+                .unwrap_or(K::Null),
+            AnyValue::BinaryOwned(value) => <[u8; 16]>::try_from(value.as_slice())
+                .map(Uuid::from_bytes)
+                .map(K::Guid)
+                .unwrap_or(K::Null),
             AnyValue::Date(v) => K::Date(NaiveDate::from_num_days_from_ce_opt(v + 719163).unwrap()),
             AnyValue::Datetime(v, TimeUnit::Milliseconds, _) => {
                 K::DateTime(DateTime::from_timestamp_nanos(v * 1000000))
@@ -157,6 +196,7 @@ impl K {
             K::Duration(_) => -10,
             K::F32(_) => -11,
             K::F64(_) => -12,
+            K::CharVector(_) => -13,
             K::String(_) => -13,
             K::Symbol(_) => -14,
             K::MixedList(_) => 90,
@@ -190,34 +230,91 @@ impl TryFrom<K> for DataFrame {
     }
 }
 
+fn checked_series_size(length: usize, value_width: usize) -> Result<usize, KolaError> {
+    length
+        .checked_mul(value_width)
+        .and_then(|length| length.checked_add(6))
+        .ok_or(KolaError::OverLengthErr())
+}
+
+pub(crate) fn validate_q_symbol(value: &str) -> Result<(), KolaError> {
+    if value.as_bytes().contains(&0) {
+        return Err(KolaError::NotAbleToSerializeErr(
+            "q symbols cannot contain NUL bytes".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_q_time_series(series: &Series) -> Result<(), KolaError> {
+    let physical = series
+        .cast(&PolarsDataType::Int64)
+        .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+    let values = physical
+        .i64()
+        .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+    if values
+        .iter()
+        .flatten()
+        .any(|nanoseconds| nanoseconds % 1_000_000 != 0)
+    {
+        return Err(KolaError::NotAbleToSerializeErr(
+            "q time only supports millisecond precision".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_guid_series(series: &Series) -> Result<(), KolaError> {
+    let values = series
+        .binary()
+        .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+    if values.iter().flatten().any(|value| value.len() != 16) {
+        return Err(KolaError::NotAbleToSerializeErr(
+            "binary series values must be exactly 16 bytes to encode as GUIDs".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
     let length = series.len();
     let data_type = series.dtype();
     match data_type {
-        PolarsDataType::Null => Ok(length * 2 + 6),
-        PolarsDataType::Boolean => Ok(length + 6),
-        PolarsDataType::Int16 => Ok(length * 2 + 6),
-        PolarsDataType::Int32 => Ok(length * 4 + 6),
-        PolarsDataType::Int64 => Ok(length * 8 + 6),
-        PolarsDataType::UInt8 => Ok(length * 2 + 6),
-        PolarsDataType::UInt16 => Ok(length * 4 + 6),
-        PolarsDataType::UInt32 => Ok(length * 8 + 6),
-        PolarsDataType::Float32 => Ok(length * 4 + 6),
-        PolarsDataType::Float64 => Ok(length * 8 + 6),
+        PolarsDataType::Null => checked_series_size(length, 2),
+        PolarsDataType::Boolean => checked_series_size(length, 1),
+        PolarsDataType::Int16 => checked_series_size(length, 2),
+        PolarsDataType::Int32 => checked_series_size(length, 4),
+        PolarsDataType::Int64 => checked_series_size(length, 8),
+        PolarsDataType::UInt8 => checked_series_size(length, 1),
+        PolarsDataType::UInt16 => checked_series_size(length, 4),
+        PolarsDataType::UInt32 => checked_series_size(length, 8),
+        PolarsDataType::Float32 => checked_series_size(length, 4),
+        PolarsDataType::Float64 => checked_series_size(length, 8),
         // to k datetime
-        PolarsDataType::Datetime(_, _) => Ok(length * 8 + 6),
-        PolarsDataType::Date => Ok(length * 8 + 6),
+        PolarsDataType::Datetime(_, _) => checked_series_size(length, 8),
+        PolarsDataType::Date => checked_series_size(length, 4),
         // to time
+        PolarsDataType::Time => {
+            validate_q_time_series(series)?;
+            checked_series_size(length, 4)
+        }
         // to timespan
-        PolarsDataType::Time => Ok(length * 8 + 6),
-        // to timespan
-        PolarsDataType::Duration(_) => Ok(length * 8 + 6),
+        PolarsDataType::Duration(_) => checked_series_size(length, 8),
         // to string
         PolarsDataType::String => {
-            let ptr = series.to_physical_repr();
-            let array = ptr.str().unwrap();
-            let str_size: usize = array.par_iter().map(|s| s.unwrap_or("").len()).sum();
-            Ok(array.get_values_size() * 6 + str_size)
+            let physical = series.to_physical_repr();
+            let values = physical
+                .str()
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            let value_bytes = values.iter().flatten().try_fold(0usize, |length, value| {
+                length
+                    .checked_add(value.len())
+                    .ok_or(KolaError::OverLengthErr())
+            })?;
+            checked_series_size(length, 6)?
+                .checked_add(value_bytes)
+                .ok_or(KolaError::OverLengthErr())
         }
         PolarsDataType::List(data_type) => {
             let values_length = series
@@ -258,24 +355,22 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
             }
         }
         PolarsDataType::Binary => {
-            let array = series.binary().unwrap();
-            let is_16_fixed_binary = array.iter().any(|v| 16 == v.unwrap_or(&[]).len());
-            if is_16_fixed_binary {
-                Ok(16 * length + 6)
-            } else {
-                Err(KolaError::Err(
-                    "Only support 16 fixed size binary as guid".to_string(),
-                ))
-            }
+            validate_guid_series(series)?;
+            checked_series_size(length, 16)
         }
         // to symbol
         PolarsDataType::Categorical(_, _) => {
-            let cat = series.cat32().unwrap();
-            let mut length: usize = 6;
-            for s in cat.iter_str() {
-                length += s.unwrap_or("").len() + 1;
-            }
-            Ok(length)
+            let categorical = series
+                .cat32()
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            categorical.iter_str().try_fold(6usize, |length, value| {
+                let value = value.unwrap_or("");
+                validate_q_symbol(value)?;
+                length
+                    .checked_add(value.len())
+                    .and_then(|length| length.checked_add(1))
+                    .ok_or(KolaError::OverLengthErr())
+            })
         }
         _ => Err(KolaError::NotSupportedSeriesTypeErr(data_type.clone())),
     }

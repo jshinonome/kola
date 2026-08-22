@@ -1,0 +1,7 @@
+node_modules/
+dist/
+artifacts/
+coverage/
+*.node
+/native.js
+/native.d.ts

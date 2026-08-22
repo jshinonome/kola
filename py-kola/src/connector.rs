@@ -83,6 +83,10 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<Py<PyAny>> {
         K::F32(k) => k.into_py_any(py),
         K::F64(k) => k.into_py_any(py),
         K::Char(k) => (k as char).into_py_any(py),
+        K::CharVector(k) => match std::str::from_utf8(&k) {
+            Ok(text) => text.into_py_any(py),
+            Err(_) => PyBytes::new(py, &k).into_py_any(py),
+        },
         K::Symbol(k) => k.into_py_any(py),
         K::String(k) => k.into_py_any(py),
         K::DateTime(k) => {
@@ -222,7 +226,7 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
         Ok(K::Symbol(value.to_string()))
     } else if any.is_instance_of::<PyBytes>() {
         let value = any.cast::<PyBytes>()?;
-        Ok(K::String(String::from_utf8(value.as_bytes().to_vec())?))
+        Ok(K::CharVector(value.as_bytes().to_vec()))
     } else if any.hasattr(intern!(any.py(), "_s"))? {
         let series = any.extract::<PySeries>()?.into();
         Ok(K::Series(series))

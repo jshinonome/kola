@@ -1,0 +1,22 @@
+{
+  "name": "kola-q-linux-x64-gnu",
+  "version": "2.5.1",
+  "description": "Linux x64 glibc native addon for kola-q",
+  "main": "kola_q.linux-x64-gnu.node",
+  "files": ["kola_q.linux-x64-gnu.node"],
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "libc": ["glibc"],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jshinonome/kola.git",
+    "directory": "js-kola"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

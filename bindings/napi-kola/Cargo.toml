@@ -1,0 +1,23 @@
+[package]
+name = "napi-kola"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Node-API bindings for kola"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+chrono = "0.4.45"
+indexmap = "2.14.0"
+kola = { path = "../../crates/kola" }
+napi = { version = "3.12.1", default-features = false, features = ["napi6"] }
+napi-derive = "3.6.3"
+polars = { workspace = true, features = ["ipc", "ipc_streaming"] }
+rustls-pki-types = "1"
+uuid = "1.23.3"
+
+[build-dependencies]
+napi-build = "2.4.1"

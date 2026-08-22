@@ -1,0 +1,21 @@
+{
+  "name": "kola-q-darwin-arm64",
+  "version": "2.5.1",
+  "description": "macOS arm64 native addon for kola-q",
+  "main": "kola_q.darwin-arm64.node",
+  "files": ["kola_q.darwin-arm64.node"],
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jshinonome/kola.git",
+    "directory": "js-kola"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "py-kola"]
+members = ["crates/*", "py-kola", "bindings/napi-kola"]
 default-members = ["crates/*"]
 
 [workspace.package]
@@ -19,7 +19,12 @@ strip = true
 opt-level = "z"
 lto = true
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
+
+[profile.node-release]
+inherits = "release"
+opt-level = 3
+panic = "unwind"
 
 [workspace.dependencies.polars-buffer]
 default-features = false

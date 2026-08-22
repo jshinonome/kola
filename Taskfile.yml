@@ -129,6 +129,43 @@ tasks:
         --warmups ${KOLA_BENCH_WARMUPS:-2}
         --iterations ${KOLA_BENCH_ITERATIONS:-5}
 
+  build-node-release:
+    dir: js-kola
+    cmds:
+      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 npm run build:release
+
+  test-node-podman:
+    cmds:
+      - defer:
+          task: kdb-stop
+      - KOLA_Q_ROWS=${KOLA_Q_ROWS:-10000} task kdb-start
+      - task: build-node-release
+      - >-
+        cd js-kola &&
+        env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64
+        KOLA_TEST_Q_EXTERNAL=1
+        KOLA_TEST_Q_HOST=127.0.0.1
+        KOLA_TEST_Q_PORT=1801
+        KOLA_Q_ROWS=${KOLA_Q_ROWS:-10000}
+        npm run test:live
+
+  benchmark-node-podman:
+    cmds:
+      - defer:
+          task: kdb-stop
+      - KOLA_Q_ROWS=${KOLA_BENCH_ROWS:-100000} task kdb-start
+      - task: build-node-release
+      - >-
+        cd js-kola &&
+        env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64
+        KOLA_TEST_Q_HOST=127.0.0.1
+        KOLA_TEST_Q_PORT=1801
+        KOLA_BENCH_ROWS=${KOLA_BENCH_ROWS:-100000}
+        KOLA_BENCH_WARMUPS=${KOLA_BENCH_WARMUPS:-2}
+        KOLA_BENCH_ITERATIONS=${KOLA_BENCH_ITERATIONS:-100}
+        KOLA_BENCH_MEMORY_RESULTS=${KOLA_BENCH_MEMORY_RESULTS:-5}
+        npm run benchmark
+
   tag:
     cmds:
       - git tag {{.VERSION}} && git push origin tag {{.VERSION}}

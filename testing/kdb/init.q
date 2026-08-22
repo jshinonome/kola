@@ -24,4 +24,5 @@ depth:([]
   bid:n#enlist 5?1.0);
 
 .kola.rows:n;
+.kola.seed:42;
 .kola.ready:1b;

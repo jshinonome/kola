@@ -1,0 +1,21 @@
+{
+  "name": "kola-q-win32-x64-msvc",
+  "version": "2.5.1",
+  "description": "Windows x64 native addon for kola-q",
+  "main": "kola_q.win32-x64-msvc.node",
+  "files": ["kola_q.win32-x64-msvc.node"],
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jshinonome/kola.git",
+    "directory": "js-kola"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

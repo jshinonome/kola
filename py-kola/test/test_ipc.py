@@ -108,6 +108,19 @@ def test_read_atom(q, query, expect):
         assert actual == expect
 
 
+def test_read_valid_char_vector_as_string(q):
+    actual = q.sync('"kola"')
+    assert isinstance(actual, str)
+    assert actual == "kola"
+
+
+def test_round_trip_arbitrary_char_vector_bytes(q):
+    value = b"\x00\x7f\x80\xff"
+    actual = q.sync("{x}", value)
+    assert isinstance(actual, bytes)
+    assert actual == value
+
+
 @pytest.mark.parametrize(
     "query,expect",
     [
