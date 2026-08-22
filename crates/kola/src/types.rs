@@ -5,7 +5,7 @@ use polars::{
     prelude::{AnyValue, DataFrame, LargeListArray, TimeUnit},
     series::Series,
 };
-use polars_arrow::array::{FixedSizeListArray, ValueSize};
+use polars_arrow::array::ValueSize;
 use rayon::iter::ParallelIterator;
 use uuid::Uuid;
 
@@ -220,12 +220,15 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
             Ok(array.get_values_size() * 6 + str_size)
         }
         PolarsDataType::List(data_type) => {
-            let array = series.chunks()[0]
-                .as_any()
-                .downcast_ref::<LargeListArray>()
-                .unwrap();
-            let length = array.offsets().len();
-            let values_length = array.len();
+            let values_length = series
+                .chunks()
+                .iter()
+                .map(|array| {
+                    let array = array.as_any().downcast_ref::<LargeListArray>().unwrap();
+                    let offsets = array.offsets().as_ref();
+                    (offsets[offsets.len() - 1] - offsets[0]) as usize
+                })
+                .sum::<usize>();
             match data_type.as_ref() {
                 PolarsDataType::Boolean => Ok(values_length + 6 * length + 6),
                 PolarsDataType::UInt8 => Ok(values_length + 6 * length + 6),
@@ -240,11 +243,7 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
             }
         }
         PolarsDataType::Array(data_type, size) => {
-            let array = series.chunks()[0]
-                .as_any()
-                .downcast_ref::<FixedSizeListArray>()
-                .unwrap();
-            let length = array.len();
+            let length = series.len();
             match data_type.as_ref() {
                 PolarsDataType::Boolean => Ok((size + 6) * length + 6),
                 PolarsDataType::UInt8 => Ok((size + 6) * length + 6),

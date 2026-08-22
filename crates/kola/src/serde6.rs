@@ -19,6 +19,7 @@ use rayon::iter::IntoParallelIterator;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::cmp::min;
 use std::io::Write;
+use std::mem::{size_of, size_of_val};
 use uuid::Uuid;
 // time difference between chrono and q types
 pub const NANOS_DIFF: i64 = 946684800000000000;
@@ -53,6 +54,28 @@ use crate::{
     errors::KolaError,
     types::{K, K_TYPE_SIZE},
 };
+
+fn downcast_array<'a, T: 'static>(
+    array: &'a dyn Array,
+    expected: &str,
+) -> Result<&'a T, KolaError> {
+    array
+        .as_any()
+        .downcast_ref::<T>()
+        .ok_or_else(|| KolaError::NotAbleToSerializeErr(format!("expected Arrow {expected} array")))
+}
+
+fn native_values_as_bytes<T: NativeType>(values: &[T]) -> &[u8] {
+    // SAFETY: NativeType values are initialized POD scalars. The byte slice uses the
+    // same allocation, lifetime, and exact size as the input slice.
+    unsafe { core::slice::from_raw_parts(values.as_ptr().cast(), size_of_val(values)) }
+}
+
+fn q_list_length(length: i64) -> Result<[u8; 4], KolaError> {
+    i32::try_from(length)
+        .map(i32::to_le_bytes)
+        .map_err(|_| KolaError::OverLengthErr())
+}
 
 pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, KolaError> {
     let k_type = vec[*pos];
@@ -120,8 +143,12 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
             }
             // timestamp
             244 => {
-                let ns = i64::from_le_bytes(vec[*pos..*pos + 8].try_into().unwrap())
-                    .saturating_add(NANOS_DIFF);
+                let q_ns = i64::from_le_bytes(vec[*pos..*pos + 8].try_into().unwrap());
+                let ns = if q_ns <= i64::MIN + 1 {
+                    0
+                } else {
+                    q_ns.saturating_add(NANOS_DIFF)
+                };
                 *pos += 8;
                 Ok(K::DateTime(create_datetime(ns)))
             }
@@ -926,7 +953,10 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
 }
 
 fn create_datetime(ns: i64) -> DateTime<Utc> {
-    match DateTime::from_timestamp(ns / 1000000000, (ns % 1000000000) as u32) {
+    match DateTime::from_timestamp(
+        ns.div_euclid(1_000_000_000),
+        ns.rem_euclid(1_000_000_000) as u32,
+    ) {
         Some(dt) => dt,
         None => {
             if ns > 0 {
@@ -1229,12 +1259,18 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
 }
 
 fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaError> {
+    let rechunked;
+    let series = if series.n_chunks() > 1 {
+        rechunked = series.rechunk();
+        &rechunked
+    } else {
+        series
+    };
     let mut vec: Vec<u8> = Vec::with_capacity(k_length);
     let k_length = series.len();
     if k_length > i32::MAX as usize {
         return Err(KolaError::OverLengthErr());
     }
-    let k_size: usize;
     match series.dtype() {
         PolarsDataType::Boolean => {
             vec.write_all(&[1, 0]).unwrap();
@@ -1259,7 +1295,6 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             })
         }
         PolarsDataType::UInt8 => {
-            k_size = 1;
             vec.write_all(&[4, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let ptr = series.to_physical_repr();
@@ -1272,12 +1307,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .unwrap_unchecked()
                         .values()
                 };
-                let v8 = unsafe { core::slice::from_raw_parts(array.as_ptr(), k_length / k_size) };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
         PolarsDataType::Int16 => {
-            k_size = 2;
             vec.write_all(&[5, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let chunks = series.i16().unwrap();
@@ -1294,14 +1328,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .unwrap_unchecked()
                         .values()
                 };
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
         PolarsDataType::Int32 => {
-            k_size = 4;
             vec.write_all(&[6, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let chunks = series.i32().unwrap();
@@ -1318,14 +1349,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .unwrap_unchecked()
                         .values()
                 };
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
         PolarsDataType::Int64 => {
-            k_size = 8;
             vec.write_all(&[7, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let new_series: Series;
@@ -1349,14 +1377,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .unwrap_unchecked()
                         .values()
                 };
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
         PolarsDataType::Float32 => {
-            k_size = 4;
             vec.write_all(&[8, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let new_series: Series;
@@ -1380,14 +1405,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .unwrap_unchecked()
                         .values()
                 };
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
         PolarsDataType::Float64 => {
-            k_size = 8;
             vec.write_all(&[9, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let new_series: Series;
@@ -1411,9 +1433,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .unwrap_unchecked()
                         .values()
                 };
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
@@ -1443,7 +1463,6 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
         }
         PolarsDataType::Date => {
             // max date - 95026601
-            k_size = 4;
             vec.write_all(&[14, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let chunks = series.cast(&PolarsDataType::Int32).unwrap();
@@ -1472,14 +1491,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         }
                     })
                     .collect();
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
         PolarsDataType::Datetime(unit, _) => {
-            k_size = 8;
             let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
             let chunks = chunks.i64().unwrap();
             let chunks = if chunks.null_count() > 0 {
@@ -1511,9 +1527,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                                 }
                             })
                             .collect();
-                        let v8 = unsafe {
-                            core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                        };
+                        let v8 = native_values_as_bytes(array.as_ref());
                         vec.write_all(v8).unwrap();
                     })
                 }
@@ -1545,16 +1559,13 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                                 }
                             })
                             .collect();
-                        let v8 = unsafe {
-                            core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                        };
+                        let v8 = native_values_as_bytes(array.as_ref());
                         vec.write_all(v8).unwrap();
                     })
                 }
             }
         }
         PolarsDataType::Duration(_) => {
-            k_size = 8;
             vec.write_all(&[16, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
@@ -1572,14 +1583,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .unwrap_unchecked()
                         .values()
                 };
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
         PolarsDataType::Time => {
-            k_size = 4;
             vec.write_all(&[19, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
             let chunks = &series.cast(&PolarsDataType::Int64).unwrap();
@@ -1609,50 +1617,47 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     })
                     .collect();
 
-                let v8 = unsafe {
-                    core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                };
+                let v8 = native_values_as_bytes(array.as_ref());
                 vec.write_all(v8).unwrap();
             })
         }
         PolarsDataType::Array(data_type, size) => {
             vec.write_all(&[0, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let array = unsafe {
-                series.array().unwrap().chunks()[0]
-                    .as_any()
-                    .downcast_ref::<FixedSizeListArray>()
-                    .unwrap_unchecked()
-            };
+            let array = downcast_array::<FixedSizeListArray>(
+                series.array().unwrap().chunks()[0].as_ref(),
+                "FixedSizeList",
+            )?;
+            if array.null_count() > 0 {
+                return Err(KolaError::NotAbleToSerializeErr(
+                    "null values in Array columns".to_string(),
+                ));
+            }
             match data_type.as_ref() {
                 PolarsDataType::Boolean => {
-                    let array = unsafe {
-                        array
-                            .values()
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .unwrap_unchecked()
-                            .values()
-                    };
-                    let len_vec = (*size as i32).to_le_bytes();
-                    for (i, b) in array.iter().enumerate() {
+                    let array = downcast_array::<BooleanArray>(array.values().as_ref(), "Boolean")?;
+                    let len_vec = q_list_length(
+                        i64::try_from(*size).map_err(|_| KolaError::OverLengthErr())?,
+                    )?;
+                    for i in 0..array.len() {
                         if i % size == 0 {
                             vec.write_all(&[1, 0]).unwrap();
                             vec.write_all(&len_vec).unwrap();
                         }
-                        if b {
-                            vec.write_all(&[1u8]).unwrap();
-                        } else {
-                            unsafe { vec.set_len(vec.len() + 1) }
-                        }
+                        vec.write_all(&[array.get(i).unwrap_or(false) as u8])
+                            .unwrap();
                     }
                 }
-                PolarsDataType::UInt8 => todo!(),
-                PolarsDataType::Int16 => todo!(),
-                PolarsDataType::Int32 => todo!(),
-                PolarsDataType::Int64 => todo!(),
-                PolarsDataType::Float32 => todo!(),
-                PolarsDataType::Float64 => todo!(),
+                PolarsDataType::UInt8
+                | PolarsDataType::Int16
+                | PolarsDataType::Int32
+                | PolarsDataType::Int64
+                | PolarsDataType::Float32
+                | PolarsDataType::Float64 => {
+                    return Err(KolaError::NotSupportedPolarsNestedListTypeErr(
+                        data_type.as_ref().clone(),
+                    ))
+                }
                 _ => {
                     return Err(KolaError::NotSupportedPolarsNestedListTypeErr(
                         data_type.as_ref().clone(),
@@ -1663,64 +1668,50 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
         PolarsDataType::List(data_type) => {
             vec.write_all(&[0, 0]).unwrap();
             vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-            let list = unsafe {
-                series.list().unwrap().chunks()[0]
-                    .as_any()
-                    .downcast_ref::<ListArray<i64>>()
-                    .unwrap_unchecked()
-            };
+            let list = downcast_array::<ListArray<i64>>(
+                series.list().unwrap().chunks()[0].as_ref(),
+                "List",
+            )?;
             let offsets = list.offsets().as_ref();
+            if list.null_count() > 0 {
+                return Err(KolaError::NotAbleToSerializeErr(
+                    "null values in List columns".to_string(),
+                ));
+            }
             match data_type.as_ref() {
                 PolarsDataType::Boolean => {
-                    let list = unsafe {
-                        list.values()
-                            .as_any()
-                            .downcast_ref::<BooleanArray>()
-                            .unwrap_unchecked()
-                            .values()
-                    };
+                    let list = downcast_array::<BooleanArray>(list.values().as_ref(), "Boolean")?;
                     for i in 0..k_length {
                         let start_offset = offsets[i] as usize;
                         let end_offset = offsets[i + 1] as usize;
                         vec.write_all(&[1, 0]).unwrap();
-                        vec.write_all(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                        vec.write_all(&q_list_length(offsets[i + 1] - offsets[i])?)
                             .unwrap();
                         for j in start_offset..end_offset {
-                            if list.get_bit(j) {
-                                vec.write_all(&[1u8]).unwrap();
-                            } else {
-                                unsafe { vec.set_len(vec.len() + 1) }
-                            }
+                            vec.write_all(&[list.get(j).unwrap_or(false) as u8])
+                                .unwrap();
                         }
                     }
                 }
                 PolarsDataType::UInt8 => {
-                    let list = unsafe {
-                        list.values()
-                            .as_any()
-                            .downcast_ref::<UInt8Array>()
-                            .unwrap_unchecked()
-                            .values()
-                            .as_ref()
-                    };
+                    let list = downcast_array::<UInt8Array>(list.values().as_ref(), "UInt8")?;
+                    let values = list.values().as_ref();
                     for i in 0..k_length {
                         let start_offset = offsets[i] as usize;
                         let end_offset = offsets[i + 1] as usize;
                         vec.write_all(&[4, 0]).unwrap();
-                        vec.write_all(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                        vec.write_all(&q_list_length(offsets[i + 1] - offsets[i])?)
                             .unwrap();
-                        vec.write_all(&list[start_offset..end_offset]).unwrap();
+                        for j in start_offset..end_offset {
+                            let value = if list.is_null(j) { 0 } else { values[j] };
+                            vec.write_all(&[value]).unwrap();
+                        }
                     }
                 }
                 PolarsDataType::Int16 => {
                     let k_type = 5u8;
-                    let k_size = K_TYPE_SIZE[k_type as usize];
-                    let array = unsafe {
-                        list.values()
-                            .as_any()
-                            .downcast_ref::<Int16Array>()
-                            .unwrap_unchecked()
-                    };
+                    let k_size = size_of::<i16>();
+                    let array = downcast_array::<Int16Array>(list.values().as_ref(), "Int16")?;
                     let p_array: PrimitiveArray<i16>;
                     let array = if array.null_count() > 0 {
                         p_array = set_at_nulls(array, i16::MIN);
@@ -1728,27 +1719,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     } else {
                         array.values()
                     };
-                    let v8: &[u8] = unsafe {
-                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                    };
+                    let v8 = native_values_as_bytes(array.as_ref());
                     for i in 0..k_length {
                         let start_offset = k_size * offsets[i] as usize;
                         let end_offset = k_size * offsets[i + 1] as usize;
                         vec.write_all(&[k_type, 0]).unwrap();
-                        vec.write_all(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                        vec.write_all(&q_list_length(offsets[i + 1] - offsets[i])?)
                             .unwrap();
                         vec.write_all(&v8[start_offset..end_offset]).unwrap();
                     }
                 }
                 PolarsDataType::Int32 => {
                     let k_type = 6u8;
-                    let k_size = K_TYPE_SIZE[k_type as usize];
-                    let array = unsafe {
-                        list.values()
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .unwrap_unchecked()
-                    };
+                    let k_size = size_of::<i32>();
+                    let array = downcast_array::<Int32Array>(list.values().as_ref(), "Int32")?;
                     let p_array: PrimitiveArray<i32>;
                     let array = if array.null_count() > 0 {
                         p_array = set_at_nulls(array, i32::MIN);
@@ -1756,27 +1740,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     } else {
                         array.values()
                     };
-                    let v8: &[u8] = unsafe {
-                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                    };
+                    let v8 = native_values_as_bytes(array.as_ref());
                     for i in 0..k_length {
                         let start_offset = k_size * offsets[i] as usize;
                         let end_offset = k_size * offsets[i + 1] as usize;
                         vec.write_all(&[k_type, 0]).unwrap();
-                        vec.write_all(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                        vec.write_all(&q_list_length(offsets[i + 1] - offsets[i])?)
                             .unwrap();
                         vec.write_all(&v8[start_offset..end_offset]).unwrap();
                     }
                 }
                 PolarsDataType::Int64 => {
                     let k_type = 7u8;
-                    let k_size = K_TYPE_SIZE[k_type as usize];
-                    let array = unsafe {
-                        list.values()
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .unwrap_unchecked()
-                    };
+                    let k_size = size_of::<i64>();
+                    let array = downcast_array::<Int64Array>(list.values().as_ref(), "Int64")?;
                     let p_array: PrimitiveArray<i64>;
                     let array = if array.null_count() > 0 {
                         p_array = set_at_nulls(array, i64::MIN);
@@ -1784,27 +1761,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     } else {
                         array.values()
                     };
-                    let v8: &[u8] = unsafe {
-                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                    };
+                    let v8 = native_values_as_bytes(array.as_ref());
                     for i in 0..k_length {
                         let start_offset = k_size * offsets[i] as usize;
                         let end_offset = k_size * offsets[i + 1] as usize;
                         vec.write_all(&[k_type, 0]).unwrap();
-                        vec.write_all(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                        vec.write_all(&q_list_length(offsets[i + 1] - offsets[i])?)
                             .unwrap();
                         vec.write_all(&v8[start_offset..end_offset]).unwrap();
                     }
                 }
                 PolarsDataType::Float32 => {
                     let k_type = 8u8;
-                    let k_size = K_TYPE_SIZE[k_type as usize];
-                    let array = unsafe {
-                        list.values()
-                            .as_any()
-                            .downcast_ref::<Float32Array>()
-                            .unwrap_unchecked()
-                    };
+                    let k_size = size_of::<f32>();
+                    let array = downcast_array::<Float32Array>(list.values().as_ref(), "Float32")?;
                     let p_array: PrimitiveArray<f32>;
                     let array = if array.null_count() > 0 {
                         p_array = set_at_nulls(array, f32::NAN);
@@ -1812,27 +1782,20 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     } else {
                         array.values()
                     };
-                    let v8: &[u8] = unsafe {
-                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                    };
+                    let v8 = native_values_as_bytes(array.as_ref());
                     for i in 0..k_length {
                         let start_offset = k_size * offsets[i] as usize;
                         let end_offset = k_size * offsets[i + 1] as usize;
                         vec.write_all(&[k_type, 0]).unwrap();
-                        vec.write_all(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                        vec.write_all(&q_list_length(offsets[i + 1] - offsets[i])?)
                             .unwrap();
                         vec.write_all(&v8[start_offset..end_offset]).unwrap();
                     }
                 }
                 PolarsDataType::Float64 => {
                     let k_type = 9u8;
-                    let k_size = K_TYPE_SIZE[k_type as usize];
-                    let array = unsafe {
-                        list.values()
-                            .as_any()
-                            .downcast_ref::<Float64Array>()
-                            .unwrap_unchecked()
-                    };
+                    let k_size = size_of::<f64>();
+                    let array = downcast_array::<Float64Array>(list.values().as_ref(), "Float64")?;
                     let p_array: PrimitiveArray<f64>;
                     let array = if array.null_count() > 0 {
                         p_array = set_at_nulls(array, f64::NAN);
@@ -1840,14 +1803,12 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     } else {
                         array.values()
                     };
-                    let v8: &[u8] = unsafe {
-                        core::slice::from_raw_parts(array.as_ptr().cast(), k_length * k_size)
-                    };
+                    let v8 = native_values_as_bytes(array.as_ref());
                     for i in 0..k_length {
                         let start_offset = k_size * offsets[i] as usize;
                         let end_offset = k_size * offsets[i + 1] as usize;
                         vec.write_all(&[k_type, 0]).unwrap();
-                        vec.write_all(&((offsets[i + 1] - offsets[i]) as i32).to_le_bytes())
+                        vec.write_all(&q_list_length(offsets[i + 1] - offsets[i])?)
                             .unwrap();
                         vec.write_all(&v8[start_offset..end_offset]).unwrap();
                     }

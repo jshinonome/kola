@@ -24,7 +24,7 @@ tasks:
 
   build-python:
     cmds:
-      - maturin develop --manifest-path py-kola/Cargo.toml
+      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 maturin develop --manifest-path py-kola/Cargo.toml
 
   install-python:
     deps:
@@ -37,7 +37,97 @@ tasks:
       - build-python
     dir: py-kola
     cmds:
-      - pytest -vv
+      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 pytest -vv
+
+  kdb-build:
+    preconditions:
+      - sh: test -n "$KX_BEARER_TOKEN"
+        msg: KX_BEARER_TOKEN must be set
+      - sh: test -n "$KDB_LICENSE_B64"
+        msg: KDB_LICENSE_B64 must be set
+    cmds:
+      - >-
+        podman build
+        --format docker
+        --secret id=kx-token,env=KX_BEARER_TOKEN
+        --secret id=kx-license,env=KDB_LICENSE_B64
+        --tag kola-kdb-test:local
+        --file testing/kdb/Containerfile
+        testing/kdb
+
+  kdb-start:
+    preconditions:
+      - sh: test -n "$KDB_LICENSE_B64"
+        msg: KDB_LICENSE_B64 must be set
+    cmds:
+      - cmd: |
+          set -e
+          cleanup() {
+            podman rm --force --ignore kola-kdb-test >/dev/null 2>&1 || \
+              echo "Failed to remove kola-kdb-test during cleanup" >&2
+            podman secret rm --ignore kola-kdb-license >/dev/null 2>&1 || \
+              echo "Failed to remove kola-kdb-license during cleanup" >&2
+          }
+          trap cleanup EXIT
+          podman image exists kola-kdb-test:local || task kdb-build
+          cleanup
+          podman secret create --replace --env=true kola-kdb-license KDB_LICENSE_B64
+          podman run --detach \
+            --name kola-kdb-test \
+            --publish 127.0.0.1:1801:1801/tcp \
+            --cpus 4 \
+            --memory 4g \
+            --tmpfs /run/kdb-license:rw,nosuid,nodev,noexec,size=1m \
+            --env KOLA_Q_ROWS=${KOLA_Q_ROWS:-10000} \
+            --secret kola-kdb-license,target=kdb-license-b64,type=mount \
+            kola-kdb-test:local
+          for attempt in $(seq 1 30); do
+            if podman healthcheck run kola-kdb-test >/dev/null 2>&1; then
+              trap - EXIT
+              exit 0
+            fi
+            sleep 1
+          done
+          podman logs kola-kdb-test
+          exit 1
+
+  kdb-stop:
+    cmds:
+      - cmd: |
+          status=0
+          podman rm --force --ignore kola-kdb-test || status=$?
+          podman secret rm --ignore kola-kdb-license || status=$?
+          exit "$status"
+
+  test-python-podman:
+    cmds:
+      - defer:
+          task: kdb-stop
+      - task: kdb-start
+      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 task build-python
+      - >-
+        cd py-kola &&
+        env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64
+        KOLA_TEST_Q_EXTERNAL=1
+        KOLA_TEST_Q_HOST=127.0.0.1
+        KOLA_TEST_Q_PORT=1801
+        KOLA_Q_ROWS=${KOLA_Q_ROWS:-10000}
+        pytest -vv
+
+  benchmark-python-podman:
+    cmds:
+      - defer:
+          task: kdb-stop
+      - KOLA_Q_ROWS=${KOLA_Q_ROWS:-100000} task kdb-start
+      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 task build-python
+      - >-
+        cd py-kola &&
+        env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64
+        KOLA_TEST_Q_HOST=127.0.0.1
+        KOLA_TEST_Q_PORT=1801
+        python benchmarks/bench_ipc.py
+        --warmups ${KOLA_BENCH_WARMUPS:-2}
+        --iterations ${KOLA_BENCH_ITERATIONS:-5}
 
   tag:
     cmds:

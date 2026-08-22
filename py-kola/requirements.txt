@@ -2,4 +2,4 @@ polars
 pyarrow
 maturin
 pytest
-patchelf
+patchelf; sys_platform == "linux"

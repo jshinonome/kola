@@ -3,6 +3,8 @@
 target
 *.pyc
 *.so
+*.pyd
+*.pdb
 test*.ipynb
 bmk
 .venv
@@ -11,3 +13,7 @@ r-kola
 tmp
 note.md
 dist
+kc.lic
+k4.lic
+testing/kdb/.env
+testing/kdb/.env.*

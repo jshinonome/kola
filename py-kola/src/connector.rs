@@ -1,5 +1,3 @@
-use std::cmp::{max, min};
-
 use crate::error::PyKolaError::{self, PythonErr};
 use chrono::{Datelike, Timelike};
 use indexmap::IndexMap;
@@ -64,6 +62,16 @@ impl KolaConnector {
     }
 }
 
+fn python_date_parts(value: &impl Datelike) -> (i32, u8, u8) {
+    if value.year() < 1 {
+        (1, 1, 1)
+    } else if value.year() > 9999 {
+        (9999, 12, 31)
+    } else {
+        (value.year(), value.month() as u8, value.day() as u8)
+    }
+}
+
 fn cast_k_to_py(py: Python, k: K) -> PyResult<Py<PyAny>> {
     match k {
         K::Boolean(k) => k.into_py_any(py),
@@ -78,23 +86,24 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<Py<PyAny>> {
         K::Symbol(k) => k.into_py_any(py),
         K::String(k) => k.into_py_any(py),
         K::DateTime(k) => {
-            if let Some(ns) = k.timestamp_nanos_opt() {
-                let datetime = PyDateTime::from_timestamp(
-                    py,
-                    ns as f64 / 1000000000.0,
-                    Some(&PyTzInfo::utc(py).unwrap()),
-                )?;
-                datetime.into_py_any(py)
-            } else {
-                Err(PythonErr("failed to get nanoseconds".to_string()).into())
-            }
+            let (year, month, day) = python_date_parts(&k);
+            let timezone = PyTzInfo::utc(py)?;
+            PyDateTime::new(
+                py,
+                year,
+                month,
+                day,
+                k.hour() as u8,
+                k.minute() as u8,
+                k.second() as u8,
+                k.nanosecond() / 1000,
+                Some(&timezone),
+            )?
+            .into_py_any(py)
         }
         K::Date(k) => {
-            let mut days = k.num_days_from_ce() as i64 - 719163;
-            days = min(days, 2932532);
-            days = max(days, -719162);
-            let date = PyDate::from_timestamp(py, 86400.0 * days as f64)?;
-            date.into_py_any(py)
+            let (year, month, day) = python_date_parts(&k);
+            PyDate::new(py, year, month, day)?.into_py_any(py)
         }
         K::Time(k) => {
             let time = PyTime::new(

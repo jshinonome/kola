@@ -1,0 +1,84 @@
+FROM ubuntu:24.04 AS installer
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN --mount=type=secret,id=kx-token,required=true \
+    download_complete=false \
+    && cleanup_download() { \
+        local status=0; \
+        rm -f /tmp/curl.conf || status=$?; \
+        if [[ "$download_complete" != true ]]; then \
+            rm -f /tmp/install_kdb.sh /tmp/l64.zip || status=$?; \
+        fi; \
+        return "$status"; \
+    } \
+    && trap cleanup_download EXIT \
+    && token="$(cat /run/secrets/kx-token)" \
+    && printf 'oauth2-bearer = "%s"\n' "$token" >/tmp/curl.conf \
+    && curl --silent --show-error --location --fail-with-body \
+        --config /tmp/curl.conf \
+        --output /tmp/install_kdb.sh \
+        https://portal.dl.kx.com/assets/raw/kdb-x/install_kdb/1.11.0/install_kdb.sh \
+    && curl --silent --show-error --location --fail-with-body \
+        --config /tmp/curl.conf \
+        --output /tmp/l64.zip \
+        https://portal.dl.kx.com/assets/raw/kdb-x/kdb-x/5.0.20260723/l64.zip \
+    && printf '%s  %s\n' \
+        7a1c7911e4451b620ec5b098c980090f16de7f2cffc3c08c897200ffb57aa67c /tmp/install_kdb.sh \
+        db75cd6fcd4103baa7429b4cdae6c3e7aeb0498419f69331d42e4f20734a1b16 /tmp/l64.zip \
+        | sha256sum --check --strict \
+    && sed -i -E \
+        '/^    install_(ai|kurl|objstor|pq|rest|sql)_module$/d; /^    install_dashboards$/d' \
+        /tmp/install_kdb.sh \
+    && download_complete=true \
+    && cleanup_download \
+    && trap - EXIT
+
+RUN --mount=type=secret,id=kx-license,required=true \
+    install_complete=false \
+    && cleanup_install() { \
+        local status=0; \
+        rm -f /tmp/install_kdb.sh /tmp/install_kdb.log /tmp/l64.zip || status=$?; \
+        if [[ "$install_complete" != true ]]; then \
+            rm -rf "$HOME/.kx" || status=$?; \
+        fi; \
+        return "$status"; \
+    } \
+    && trap cleanup_install EXIT \
+    && license="$(cat /run/secrets/kx-license)" \
+    && if ! bash /tmp/install_kdb.sh --offline --non-interactive --b64lic "$license" \
+        >/tmp/install_kdb.log 2>&1; then \
+        echo "KDB-X installation failed" >&2; \
+        grep -E 'Error|error|not found|required|Missing|missing|Cannot|cannot' \
+            /tmp/install_kdb.log >&2 || true; \
+        exit 1; \
+    fi \
+    && rm -f "$HOME/.kx/kc.lic" "$HOME/.kx/k4.lic" \
+    && test -z "$(find "$HOME/.kx" -type f \( -name kc.lic -o -name k4.lic \) -print -quit)" \
+    && install_complete=true \
+    && cleanup_install \
+    && trap - EXIT
+
+FROM ubuntu:24.04
+
+COPY --from=installer /root/.kx /opt/kdbx
+RUN ln -s /opt/kdbx/bin/q /usr/local/bin/q
+
+COPY entrypoint.sh /usr/local/bin/kdb-entrypoint
+COPY init.q /opt/kola/init.q
+RUN sed -i 's/\r$//' /usr/local/bin/kdb-entrypoint /opt/kola/init.q \
+    && chmod 0755 /usr/local/bin/kdb-entrypoint
+
+EXPOSE 1801
+HEALTHCHECK --interval=1s --timeout=1s --start-period=1s --retries=30 \
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/1801"]
+
+ENTRYPOINT ["/usr/local/bin/kdb-entrypoint"]
+CMD ["/opt/kola/init.q", "-p", "1801"]

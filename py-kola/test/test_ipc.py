@@ -1,9 +1,11 @@
 import logging
 import math
+import os
 from datetime import date, datetime, time, timedelta, timezone
 
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 from kola import KolaError, KolaIOError, Q
 
@@ -58,7 +60,16 @@ logger = logging.getLogger(__name__)
         ("`q", "q"),
         ("`kdb", "kdb"),
         # timestamp
+        (
+            "1969.12.31D12:00:00.123456789",
+            datetime(1969, 12, 31, 12, 0, 0, 123456, tzinfo=timezone.utc),
+        ),
         ("0Np", datetime(1970, 1, 1, 0, 0, tzinfo=timezone.utc)),
+        ("-0Wp", datetime(1970, 1, 1, 0, 0, tzinfo=timezone.utc)),
+        (
+            "0Wp",
+            datetime(2262, 4, 11, 23, 47, 16, 854775, tzinfo=timezone.utc),
+        ),
         ("2023.11.11D0", datetime(2023, 11, 11, 0, 0, tzinfo=timezone.utc)),
         (
             "2023.11.11D10:02:00.979147390",
@@ -66,6 +77,8 @@ logger = logging.getLogger(__name__)
         ),
         # date
         ("0Nd", date(1, 1, 1)),
+        ("-0Wd", date(1, 1, 1)),
+        ("0Wd", date(9999, 12, 31)),
         ("2022.05.30", date(2022, 5, 30)),
         # timespan
         ("0D00", timedelta(seconds=0)),
@@ -214,13 +227,99 @@ def test_auto_connect(q):
     q.connect()
 
 
+def test_fixture_data(q):
+    rows = int(os.environ.get("KOLA_Q_ROWS", "10000"))
+    assert q.sync(".kola.ready")
+    assert rows == q.sync(".kola.rows")
+    assert rows == q.sync("count trade")
+    assert rows == q.sync("count wide")
+    assert rows == q.sync("count depth")
+    assert 14 == q.sync("count cols trade")
+    assert 64 == q.sync("count cols wide")
+    assert 5 == q.sync("count cols depth")
+    depth = q.sync("depth")
+    assert q.sync("{x~depth}", depth)
+
+
+def test_write_multichunk_table(q):
+    frame = pl.concat(
+        [
+            pl.DataFrame({"value": [1, 2], "depth": [[1.0, 2.0], []]}),
+            pl.DataFrame({"value": [3, 4], "depth": [[3.0], [4.0, 5.0]]}),
+        ],
+        rechunk=False,
+    )
+    assert frame["value"].n_chunks() > 1
+    assert frame["depth"].n_chunks() > 1
+    assert_frame_equal(q.sync("{x}", frame), frame)
+
+
 def test_io_error():
-    q = Q("DUMMY", 1800)
-    with pytest.raises(
-        KolaIOError,
-        match="failed to lookup address information: Name or service not known",
-    ):
+    q = Q("does-not-exist.invalid", 1800)
+    with pytest.raises(KolaIOError):
         q.sync("1+`a")
+
+
+def test_write_sliced_nested_list(q):
+    frame = pl.DataFrame(
+        {"depth": [[0.0], [1.0, None], [2.0, 3.0], [4.0]]}
+    ).slice(1, 2)
+    assert_frame_equal(q.sync("{x}", frame), frame)
+
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [pl.Int16, pl.Int32, pl.Int64, pl.Float32, pl.Float64],
+)
+def test_write_nested_numeric_lists(q, dtype):
+    frame = pl.DataFrame(
+        {
+            "depth": pl.Series(
+                "depth",
+                [[1, None, 2], [], [3, 4, 5, 6]],
+                dtype=pl.List(dtype),
+            )
+        }
+    )
+    assert_frame_equal(q.sync("{x}", frame), frame)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "values", "expected"),
+    [
+        (pl.Boolean, [[True, None, False], []], [[True, False, False], []]),
+        (pl.UInt8, [[1, None, 2], []], [[1, 0, 2], []]),
+    ],
+)
+def test_write_nested_bool_and_byte_nulls(q, dtype, values, expected):
+    frame = pl.DataFrame(
+        {"depth": pl.Series("depth", values, dtype=pl.List(dtype))}
+    )
+    expected_frame = pl.DataFrame(
+        {"depth": pl.Series("depth", expected, dtype=pl.List(dtype))}
+    )
+    assert_frame_equal(q.sync("{x}", frame), expected_frame)
+
+
+def test_write_null_nested_list_is_rejected(q):
+    frame = pl.DataFrame({"depth": [[1.0], None]})
+    with pytest.raises(KolaError, match="null values in List columns"):
+        q.sync("{x}", frame)
+
+
+def test_write_null_fixed_array_is_rejected(q):
+    frame = pl.DataFrame(
+        {
+            "flags": pl.Series(
+                "flags",
+                [[True, False], None],
+                dtype=pl.Array(pl.Boolean, shape=2),
+            )
+        }
+    )
+    with pytest.raises(KolaError, match="null values in Array columns"):
+        q.sync("{x}", frame)
 
 
 def test_asyn(q):
