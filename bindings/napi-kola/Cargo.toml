@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 chrono = "0.4.45"
 indexmap = "2.14.0"
 kola = { path = "../../crates/kola" }
-napi = { version = "3.12.1", default-features = false, features = ["napi6"] }
+napi = { version = "3.12.1", default-features = false, features = ["napi6", "dyn-symbols"] }
 napi-derive = "3.6.3"
 polars = { workspace = true, features = ["ipc", "ipc_streaming"] }
 rustls-pki-types = "1"
