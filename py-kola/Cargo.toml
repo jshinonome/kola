@@ -21,20 +21,3 @@ indexmap = "2.14.0"
 
 [dependencies.polars]
 workspace = true
-
-[profile.opt-dev]
-strip = "symbols"
-inherits = "dev"
-opt-level = 1
-
-[profile.debug-release]
-inherits = "release"
-debug = true
-incremental = true
-codegen-units = 16
-lto = "thin"
-
-[profile.release]
-strip = "symbols"
-codegen-units = 1
-lto = "fat"

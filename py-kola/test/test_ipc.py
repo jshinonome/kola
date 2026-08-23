@@ -15,6 +15,7 @@ from kola import (
     Q,
     serialize_as_ipc_bytes6,
 )
+from kola.kola import generate_j6_ipc_msg
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,61 @@ def test_q_function_value_exports_validation_and_exact_frames():
     ) + b"ctx\0" + bytes([10, 0, 7, 0, 0, 0]) + b" {x+y} "
 
 
+def test_python_container_conversion_rejects_cycles_but_allows_reuse():
+    cyclic_list = []
+    cyclic_list.append(cyclic_list)
+    with pytest.raises(ValueError, match="cyclic Python containers"):
+        serialize_as_ipc_bytes6("sync", False, cyclic_list)
+
+    cyclic_dict = {}
+    cyclic_dict["self"] = cyclic_dict
+    with pytest.raises(ValueError, match="cyclic Python containers"):
+        serialize_as_ipc_bytes6("sync", False, cyclic_dict)
+
+    shared = [1]
+    assert serialize_as_ipc_bytes6("sync", False, [shared, shared])
+
+
+def test_python_container_conversion_enforces_maximum_depth():
+    value = 0
+    for _ in range(64):
+        value = [value]
+    assert serialize_as_ipc_bytes6("sync", False, value)
+
+    with pytest.raises(ValueError, match="nesting exceeds 64 levels"):
+        serialize_as_ipc_bytes6("sync", False, [value])
+
+
+def test_serialization_preserves_python_error_types_and_validates_message_type():
+    with pytest.raises(OverflowError):
+        serialize_as_ipc_bytes6("sync", False, 1 << 100)
+
+    with pytest.raises(ValueError, match="msg_type must be 0, 1, or 2"):
+        generate_j6_ipc_msg(3, False, 1 << 100)
+
+    with pytest.raises(TypeError):
+        serialize_as_ipc_bytes6("sync", False, {1: "not a symbol key"})
+
+
+@pytest.mark.parametrize(
+    "value,error",
+    [
+        (datetime(1700, 1, 1, tzinfo=timezone.utc), OverflowError),
+        (timedelta(days=106_752), OverflowError),
+        (time(0, 0, 0, 1), ValueError),
+    ],
+)
+def test_serialization_rejects_unrepresentable_temporal_values(value, error):
+    with pytest.raises(error):
+        serialize_as_ipc_bytes6("sync", False, value)
+
+
+def test_call_argument_limit_is_checked_before_conversion():
+    client = Q("does-not-exist.invalid", 1800, user="test")
+    with pytest.raises(TypeError, match="at most 8 arguments"):
+        client.sync("", 1 << 100, *([0] * 8))
+
+
 @pytest.mark.parametrize(
     "query,expect",
     [
@@ -117,28 +173,27 @@ def test_q_function_value_exports_validation_and_exact_frames():
         ("`kdb", "kdb"),
         # timestamp
         (
-            "1969.12.31D12:00:00.123456789",
+            "1969.12.31D12:00:00.123456",
             datetime(1969, 12, 31, 12, 0, 0, 123456, tzinfo=timezone.utc),
         ),
         ("0Np", datetime(1970, 1, 1, 0, 0, tzinfo=timezone.utc)),
         ("-0Wp", datetime(1970, 1, 1, 0, 0, tzinfo=timezone.utc)),
-        (
-            "0Wp",
-            datetime(2262, 4, 11, 23, 47, 16, 854775, tzinfo=timezone.utc),
-        ),
         ("2023.11.11D0", datetime(2023, 11, 11, 0, 0, tzinfo=timezone.utc)),
         (
-            "2023.11.11D10:02:00.979147390",
+            "2023.11.11D10:02:00.979147",
             datetime(2023, 11, 11, 10, 2, 0, 979147, tzinfo=timezone.utc),
         ),
         # date
-        ("0Nd", date(1, 1, 1)),
-        ("-0Wd", date(1, 1, 1)),
-        ("0Wd", date(9999, 12, 31)),
+        ("0001.01.01", date(1, 1, 1)),
+        ("9999.12.31", date(9999, 12, 31)),
         ("2022.05.30", date(2022, 5, 30)),
         # timespan
         ("0D00", timedelta(seconds=0)),
-        ("0D12:34:56.123456789", timedelta(seconds=45296, microseconds=123456)),
+        ("0D12:34:56.123456", timedelta(seconds=45296, microseconds=123456)),
+        (
+            "-0D00:00:00.000001",
+            timedelta(days=-1, seconds=86399, microseconds=999999),
+        ),
         # minute
         ("00:00:00", time(0, 0)),
         ("12:34:56", time(12, 34, 56)),
@@ -162,6 +217,35 @@ def test_read_atom(q, query, expect):
         assert expect(actual)
     else:
         assert actual == expect
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "0Wp",
+        "0Nd",
+        "-0Wd",
+        "0Wd",
+        "1969.12.31D12:00:00.123456789",
+        "0D12:34:56.123456789",
+    ],
+)
+def test_read_atom_rejects_unrepresentable_temporal_values(q, query):
+    with pytest.raises((KolaError, OverflowError, ValueError)):
+        q.sync(query)
+
+
+def test_read_container_conversion_enforces_maximum_depth(q):
+    query = "0"
+    for _ in range(64):
+        query = f"({query};::)"
+    value = q.sync(query)
+    for _ in range(64):
+        value = value[0]
+    assert value == 0
+
+    with pytest.raises((KolaError, ValueError), match="nesting exceeds 64 levels"):
+        q.sync(f"({query};::)")
 
 
 def test_read_valid_char_vector_as_string(q):
@@ -309,7 +393,7 @@ def test_error(q):
 
 def test_auto_connect(q):
     q.disconnect()
-    q.sync(".z.p")
+    assert q.sync("1+1") == 2
     q.connect()
 
 
@@ -344,6 +428,8 @@ def test_io_error():
     q = Q("does-not-exist.invalid", 1800)
     with pytest.raises(KolaIOError):
         q.sync("1+`a")
+    with pytest.raises(KolaIOError):
+        q.asyn("1+`a")
 
 
 def test_write_sliced_nested_list(q):
@@ -409,7 +495,7 @@ def test_write_null_fixed_array_is_rejected(q):
 
 
 def test_asyn(q):
-    q.asyn(".kola.x:18")
+    assert q.asyn(".kola.x:18") is None
     assert 18 == q.sync(".kola.x")
 
 

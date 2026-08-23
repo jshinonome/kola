@@ -260,6 +260,12 @@ pub fn unzip_lz4(buf: &[u8], footer_index: usize, block_num: usize) -> Result<Ve
             .ok_or_else(|| KolaError::Err("Kxzip LZ4 frame size overflowed".to_owned()))?;
         block_start = block_end;
     }
+    if block_start != footer_index {
+        return Err(KolaError::Err(format!(
+            "Kxzip data contains {} trailing compressed bytes",
+            footer_index - block_start
+        )));
+    }
 
     let mut zipped_bytes = Vec::new();
     zipped_bytes
@@ -361,7 +367,11 @@ mod tests {
     use polars_arrow::array::Utf8Array;
 
     use super::{checked_j6_ipc_total_length, MAX_J6_IPC_MESSAGE_SIZE};
-    use crate::{io, serde6::deserialize};
+    use crate::{
+        io,
+        serde6::{deserialize, serialize},
+        types::K,
+    };
 
     fn one_block_kxzip(block: &[u8], encoded_size: u32, unzipped_size: u64) -> Vec<u8> {
         let footer_index = 8 + block.len();
@@ -388,8 +398,7 @@ mod tests {
                 path.to_str()
                     .expect("temporary q binary fixture path is not UTF-8"),
             )
-            .err()
-            .expect("short q binary file should fail");
+            .expect_err("short q binary file should fail");
             assert!(matches!(
                 error,
                 crate::errors::KolaError::DeserializationErr(_)
@@ -434,8 +443,7 @@ mod tests {
                 .to_str()
                 .expect("temporary directory path is not UTF-8"),
         )
-        .err()
-        .expect("directory path should fail");
+        .expect_err("directory path should fail");
         assert!(error.to_string().contains("not a regular file"));
     }
 
@@ -455,9 +463,7 @@ mod tests {
     #[test]
     fn unzip_rejects_truncated_block_range() {
         let bytes = one_block_kxzip(&[], 1, 1);
-        let error = io::unzip(&bytes)
-            .err()
-            .expect("truncated LZ4 block should fail");
+        let error = io::unzip(&bytes).expect_err("truncated LZ4 block should fail");
         assert!(error.to_string().contains("beyond compressed data"));
     }
 
@@ -470,10 +476,45 @@ mod tests {
     #[test]
     fn unzip_rejects_oversized_output() {
         let bytes = one_block_kxzip(&[0], 1, u64::MAX);
-        let error = io::unzip(&bytes)
-            .err()
-            .expect("oversized Kxzip output should fail");
+        let error = io::unzip(&bytes).expect_err("oversized Kxzip output should fail");
         assert!(error.to_string().contains("safety limit"));
+    }
+
+    #[test]
+    fn unzip_rejects_trailing_compressed_bytes() {
+        let bytes = one_block_kxzip(&[0, 0], 1, 1);
+        let error = io::unzip(&bytes).expect_err("trailing compressed bytes should fail");
+        assert!(error.to_string().contains("trailing compressed bytes"));
+    }
+
+    #[test]
+    fn deserialize_j6_rejects_trailing_bytes() {
+        let mut bytes = serialize(&K::I32(42)).expect("test value should serialize");
+        bytes.push(0);
+        let error = io::deserialize_j6(&bytes).expect_err("trailing J6 bytes should fail");
+        assert!(error.to_string().contains("trailing byte"));
+    }
+
+    #[test]
+    fn read_binary_table_rejects_trailing_bytes() {
+        let table =
+            DataFrame::new_infer_height(vec![Series::new("value".into(), [1i32].as_ref()).into()])
+                .expect("test table should build");
+        let mut bytes = vec![255, 1];
+        bytes.extend_from_slice(
+            &serialize(&K::DataFrame(table)).expect("test table should serialize"),
+        );
+        bytes.push(0);
+        let path =
+            std::env::temp_dir().join(format!("kola-trailing-j6-{}.bin", std::process::id()));
+        std::fs::write(&path, bytes).expect("failed to write trailing-byte q binary fixture");
+        let error = io::read_j6_binary_table(
+            path.to_str()
+                .expect("temporary q binary fixture path is not UTF-8"),
+        )
+        .expect_err("trailing q binary file bytes should fail");
+        assert!(error.to_string().contains("trailing byte"));
+        std::fs::remove_file(path).expect("failed to remove q binary fixture");
     }
 
     #[test]

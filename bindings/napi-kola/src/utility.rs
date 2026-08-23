@@ -2,10 +2,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use kola::io::{generate_j6_ipc_msg, read_j6_binary_table};
 use kola::types::{MsgType, K};
-use napi::bindgen_prelude::{AsyncTask, Env, Task};
+use napi::bindgen_prelude::{AsyncTask, Env, Task, Unknown};
 use napi_derive::napi;
 
-use crate::dto::{k_into_native, NativeResult, NativeValue, OwnedNativeValue};
+use crate::dto::{k_into_native, snapshot_native_value, NativeResult, OwnedNativeValue};
 use crate::error::BindingError;
 
 enum UtilityOperation {
@@ -98,13 +98,16 @@ pub fn read_binary6(path: String) -> AsyncTask<UtilityTask> {
     })
 }
 
-#[napi(js_name = "serializeAsIpcBytes6")]
+#[napi(
+    js_name = "serializeAsIpcBytes6",
+    ts_args_type = "messageType: string, compress: boolean, value: NativeValue"
+)]
 pub fn serialize_as_ipc_bytes6(
     message_type: String,
     compress: bool,
-    value: NativeValue,
+    value: Unknown<'_>,
 ) -> AsyncTask<UtilityTask> {
-    let operation = match OwnedNativeValue::try_from(value) {
+    let operation = match snapshot_native_value(value) {
         Ok(value) => UtilityOperation::Serialize {
             message_type,
             compress,

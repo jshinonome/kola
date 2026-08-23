@@ -1,7 +1,8 @@
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Timelike, Utc};
 use indexmap::IndexMap;
 use kola::types::{QLambda, QOperator, K, MIN_Q_TIMESTAMP_UNIX_NANOS};
-use napi::bindgen_prelude::{BigInt, Buffer};
+use napi::bindgen_prelude::{Array, BigInt, Buffer, BufferSlice, FromNapiValue, Object, Unknown};
+use napi::{JsString, JsValue, ValueType};
 use napi_derive::napi;
 use std::mem::size_of;
 use uuid::Uuid;
@@ -11,6 +12,26 @@ use crate::error::BindingError;
 
 const MAX_VALUE_DEPTH: usize = 64;
 const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_FIELD_NAME_BYTES: usize = 32;
+const MAX_TAG_BYTES: usize = 32;
+const FIELD_BOOL: u16 = 1 << 0;
+const FIELD_NUMBER: u16 = 1 << 1;
+const FIELD_BIGINT: u16 = 1 << 2;
+const FIELD_STRING: u16 = 1 << 3;
+const FIELD_CONTEXT: u16 = 1 << 4;
+const FIELD_BYTES: u16 = 1 << 5;
+const FIELD_ITEMS: u16 = 1 << 6;
+const FIELD_ENTRIES: u16 = 1 << 7;
+const PAYLOAD_FIELDS: [(&str, u16); 8] = [
+    ("boolValue", FIELD_BOOL),
+    ("numberValue", FIELD_NUMBER),
+    ("bigintValue", FIELD_BIGINT),
+    ("stringValue", FIELD_STRING),
+    ("context", FIELD_CONTEXT),
+    ("bytesValue", FIELD_BYTES),
+    ("items", FIELD_ITEMS),
+    ("entries", FIELD_ENTRIES),
+];
 const NANOS_PER_MILLISECOND: i64 = 1_000_000;
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 const NANOS_PER_DAY: i64 = 86_400 * NANOS_PER_SECOND;
@@ -117,12 +138,18 @@ impl SnapshotBudget {
     }
 
     fn charge(&mut self, bytes: usize) -> Result<(), BindingError> {
-        self.remaining = self.remaining.checked_sub(bytes).ok_or_else(|| {
-            BindingError::conversion(format!(
+        self.ensure(bytes)?;
+        self.remaining -= bytes;
+        Ok(())
+    }
+
+    fn ensure(&self, bytes: usize) -> Result<(), BindingError> {
+        if bytes > self.remaining {
+            return Err(BindingError::conversion(format!(
                 "native value snapshot exceeds its {} byte limit",
                 self.limit
-            ))
-        })?;
+            )));
+        }
         Ok(())
     }
 }
@@ -151,6 +178,7 @@ impl OwnedNativeValue {
                 "native value nesting exceeds {MAX_VALUE_DEPTH} levels"
             )));
         }
+        validate_native_value_shape(&value)?;
         budget.charge(size_of::<OwnedNativeValue>())?;
         budget.charge(value.tag.len())?;
         if let Some(string) = &value.string_value {
@@ -164,43 +192,38 @@ impl OwnedNativeValue {
         }
 
         let tag = value.tag;
-        let bigint_value = value
-            .bigint_value
-            .map(|value| {
-                let (value, lossless) = value.get_i64();
-                if lossless {
-                    Ok(value)
-                } else {
-                    Err(BindingError::conversion(
-                        "bigintValue is outside the signed 64-bit range",
-                    ))
-                }
-            })
-            .transpose()?;
+        let bigint_value = value.bigint_value.map(bigint_to_i64).transpose()?;
         let items = value
             .items
             .map(|items| {
-                items
-                    .into_iter()
-                    .map(|item| Self::snapshot(item, depth + 1, budget))
-                    .collect()
+                budget.ensure(allocation_size::<OwnedNativeValue>(items.len())?)?;
+                let mut snapshot = try_vec_with_capacity(items.len(), "native list snapshot")?;
+                for item in items {
+                    snapshot.push(Self::snapshot(item, depth + 1, budget)?);
+                }
+                Ok::<_, BindingError>(snapshot)
             })
             .transpose()?;
         let entries = value
             .entries
             .map(|entries| {
-                entries
-                    .into_iter()
-                    .map(|entry| {
-                        budget.charge(size_of::<OwnedNativeEntry>())?;
-                        budget.charge(entry.key.len())?;
-                        Ok(OwnedNativeEntry {
-                            key: entry.key,
-                            value: Self::snapshot(entry.value, depth + 1, budget)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, BindingError>>()
+                budget.ensure(allocation_size::<OwnedNativeEntry>(entries.len())?)?;
+                let mut snapshot =
+                    try_vec_with_capacity(entries.len(), "native dictionary snapshot")?;
+                for entry in entries {
+                    budget.charge(size_of::<OwnedNativeEntry>())?;
+                    budget.charge(entry.key.len())?;
+                    snapshot.push(OwnedNativeEntry {
+                        key: entry.key,
+                        value: Self::snapshot(entry.value, depth + 1, budget)?,
+                    });
+                }
+                Ok::<_, BindingError>(snapshot)
             })
+            .transpose()?;
+        let bytes_value = value
+            .bytes_value
+            .map(|bytes| copy_bytes(&bytes, "native bytes snapshot"))
             .transpose()?;
 
         Ok(Self {
@@ -210,7 +233,7 @@ impl OwnedNativeValue {
             bigint_value,
             string_value: value.string_value,
             context: value.context,
-            bytes_value: value.bytes_value.map(|bytes| bytes.as_ref().to_vec()),
+            bytes_value,
             items,
             entries,
         })
@@ -388,6 +411,392 @@ impl OwnedNativeValue {
     }
 }
 
+fn expected_payload_fields(tag: &str) -> Result<u16, BindingError> {
+    match tag {
+        "null" => Ok(0),
+        "boolean" => Ok(FIELD_BOOL),
+        "guid" | "symbol" | "string" | "operator" | "date" => Ok(FIELD_STRING),
+        "u8" | "i16" | "i32" | "f32" | "f64" | "char" => Ok(FIELD_NUMBER),
+        "i64" | "timestamp" | "time" | "timespan" => Ok(FIELD_BIGINT),
+        "lambda" => Ok(FIELD_STRING | FIELD_CONTEXT),
+        "bytes" | "series" | "table" => Ok(FIELD_BYTES),
+        "list" => Ok(FIELD_ITEMS),
+        "dictionary" => Ok(FIELD_ENTRIES),
+        tag => Err(BindingError::conversion(format!(
+            "unsupported native value tag {tag:?}"
+        ))),
+    }
+}
+
+fn validate_payload_fields(tag: &str, actual: u16) -> Result<u16, BindingError> {
+    let expected = expected_payload_fields(tag)?;
+    for (field, bit) in PAYLOAD_FIELDS {
+        if expected & bit != 0 && actual & bit == 0 {
+            return Err(BindingError::conversion(format!("{tag} requires {field}")));
+        }
+    }
+    for (field, bit) in PAYLOAD_FIELDS {
+        if expected & bit == 0 && actual & bit != 0 {
+            return Err(BindingError::conversion(format!(
+                "{tag} does not accept {field}"
+            )));
+        }
+    }
+    Ok(expected)
+}
+
+fn native_payload_fields(value: &NativeValue) -> u16 {
+    (u16::from(value.bool_value.is_some()) * FIELD_BOOL)
+        | (u16::from(value.number_value.is_some()) * FIELD_NUMBER)
+        | (u16::from(value.bigint_value.is_some()) * FIELD_BIGINT)
+        | (u16::from(value.string_value.is_some()) * FIELD_STRING)
+        | (u16::from(value.context.is_some()) * FIELD_CONTEXT)
+        | (u16::from(value.bytes_value.is_some()) * FIELD_BYTES)
+        | (u16::from(value.items.is_some()) * FIELD_ITEMS)
+        | (u16::from(value.entries.is_some()) * FIELD_ENTRIES)
+}
+
+fn validate_native_value_shape(value: &NativeValue) -> Result<(), BindingError> {
+    validate_payload_fields(&value.tag, native_payload_fields(value)).map(|_| ())
+}
+
+fn bigint_to_i64(value: BigInt) -> Result<i64, BindingError> {
+    let (value, lossless) = value.get_i64();
+    if lossless {
+        Ok(value)
+    } else {
+        Err(BindingError::conversion(
+            "bigintValue is outside the signed 64-bit range",
+        ))
+    }
+}
+
+fn allocation_size<T>(length: usize) -> Result<usize, BindingError> {
+    length
+        .checked_mul(size_of::<T>())
+        .ok_or_else(|| BindingError::conversion("native value snapshot allocation size overflowed"))
+}
+
+fn try_vec_with_capacity<T>(length: usize, description: &str) -> Result<Vec<T>, BindingError> {
+    let mut values = Vec::new();
+    values.try_reserve_exact(length).map_err(|error| {
+        BindingError::conversion(format!(
+            "unable to allocate {description} with {length} elements: {error}"
+        ))
+    })?;
+    Ok(values)
+}
+
+fn copy_bytes(bytes: &[u8], description: &str) -> Result<Vec<u8>, BindingError> {
+    let mut snapshot = try_vec_with_capacity(bytes.len(), description)?;
+    snapshot.extend_from_slice(bytes);
+    Ok(snapshot)
+}
+
+fn napi_conversion(field: &str, error: napi::Error) -> BindingError {
+    BindingError::conversion(format!("invalid {field}: {}", error.reason))
+}
+
+fn check_napi_status(status: napi::sys::napi_status, operation: &str) -> Result<(), BindingError> {
+    if status == napi::sys::Status::napi_ok {
+        Ok(())
+    } else {
+        Err(BindingError::conversion(format!(
+            "{operation} failed with Node-API status {status:?}"
+        )))
+    }
+}
+
+fn object_keys_limited(
+    object: &Object<'_>,
+    maximum: usize,
+    description: &str,
+) -> Result<Vec<String>, BindingError> {
+    let value = object.value();
+    let mut raw_names = std::ptr::null_mut();
+    check_napi_status(
+        unsafe { napi::sys::napi_get_property_names(value.env, value.value, &mut raw_names) },
+        "reading native object property names",
+    )?;
+    let names = unsafe { Array::from_napi_value(value.env, raw_names) }
+        .map_err(|error| napi_conversion(description, error))?;
+    let length = names.len() as usize;
+    if length > maximum {
+        return Err(BindingError::conversion(format!(
+            "{description} has more than {maximum} fields"
+        )));
+    }
+
+    let mut keys = try_vec_with_capacity(length, "native object field list")?;
+    for index in 0..names.len() {
+        let key = names
+            .get::<JsString>(index)
+            .map_err(|error| napi_conversion(description, error))?
+            .ok_or_else(|| BindingError::conversion(format!("{description} field is missing")))?;
+        let length = key
+            .utf8_len()
+            .map_err(|error| napi_conversion(description, error))?;
+        if length > MAX_FIELD_NAME_BYTES {
+            return Err(BindingError::conversion(format!(
+                "{description} contains an unsupported field name"
+            )));
+        }
+        keys.push(
+            key.into_utf8()
+                .and_then(|value| value.into_owned())
+                .map_err(|error| napi_conversion(description, error))?,
+        );
+    }
+    Ok(keys)
+}
+
+fn payload_fields_from_keys(keys: &[String], description: &str) -> Result<u16, BindingError> {
+    if !keys.iter().any(|key| key == "tag") {
+        return Err(BindingError::conversion(format!(
+            "{description} requires tag"
+        )));
+    }
+    let mut fields = 0;
+    for key in keys {
+        if key == "tag" {
+            continue;
+        }
+        let Some((_, bit)) = PAYLOAD_FIELDS.iter().find(|(field, _)| key == field) else {
+            return Err(BindingError::conversion(format!(
+                "{description} contains unsupported field {key:?}"
+            )));
+        };
+        fields |= *bit;
+    }
+    Ok(fields)
+}
+
+fn required_property<'env, T: FromNapiValue>(
+    object: &Object<'env>,
+    field: &str,
+) -> Result<T, BindingError> {
+    object
+        .get(field)
+        .map_err(|error| napi_conversion(field, error))?
+        .ok_or_else(|| BindingError::conversion(format!("native value requires {field}")))
+}
+
+fn required_string_property(
+    object: &Object<'_>,
+    field: &str,
+    maximum: usize,
+    budget: &mut SnapshotBudget,
+) -> Result<String, BindingError> {
+    let value = required_property::<JsString>(object, field)?;
+    let length = value
+        .utf8_len()
+        .map_err(|error| napi_conversion(field, error))?;
+    if length > maximum {
+        return Err(BindingError::conversion(format!(
+            "{field} exceeds its {maximum} byte limit"
+        )));
+    }
+    budget.charge(length)?;
+    value
+        .into_utf8()
+        .and_then(|value| value.into_owned())
+        .map_err(|error| napi_conversion(field, error))
+}
+
+fn ensure_not_ancestor(value: Unknown<'_>, ancestors: &[Unknown<'_>]) -> Result<(), BindingError> {
+    let raw = value.value();
+    for ancestor in ancestors {
+        let mut equal = false;
+        check_napi_status(
+            unsafe {
+                napi::sys::napi_strict_equals(raw.env, value.raw(), ancestor.raw(), &mut equal)
+            },
+            "checking native value object identity",
+        )?;
+        if equal {
+            return Err(BindingError::conversion(
+                "native value contains a reference cycle",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn snapshot_unknown_value<'env>(
+    value: Unknown<'env>,
+    depth: usize,
+    budget: &mut SnapshotBudget,
+    ancestors: &mut Vec<Unknown<'env>>,
+) -> Result<OwnedNativeValue, BindingError> {
+    if depth > MAX_VALUE_DEPTH {
+        return Err(BindingError::conversion(format!(
+            "native value nesting exceeds {MAX_VALUE_DEPTH} levels"
+        )));
+    }
+    if value
+        .get_type()
+        .map_err(|error| napi_conversion("native value", error))?
+        != ValueType::Object
+    {
+        return Err(BindingError::conversion("native value must be an object"));
+    }
+    ensure_not_ancestor(value, ancestors)?;
+    ancestors.push(value);
+    let result = snapshot_unknown_object(value, depth, budget, ancestors);
+    ancestors.pop();
+    result
+}
+
+fn snapshot_unknown_object<'env>(
+    value: Unknown<'env>,
+    depth: usize,
+    budget: &mut SnapshotBudget,
+    ancestors: &mut Vec<Unknown<'env>>,
+) -> Result<OwnedNativeValue, BindingError> {
+    let object = unsafe { value.cast::<Object>() }
+        .map_err(|error| napi_conversion("native value", error))?;
+    let keys = object_keys_limited(&object, PAYLOAD_FIELDS.len() + 1, "native value")?;
+    let actual_fields = payload_fields_from_keys(&keys, "native value")?;
+
+    budget.charge(size_of::<OwnedNativeValue>())?;
+    let tag = required_string_property(&object, "tag", MAX_TAG_BYTES, budget)?;
+    let expected_fields = validate_payload_fields(&tag, actual_fields)?;
+
+    let bool_value = (expected_fields == FIELD_BOOL)
+        .then(|| required_property(&object, "boolValue"))
+        .transpose()?;
+    let number_value = (expected_fields == FIELD_NUMBER)
+        .then(|| required_property(&object, "numberValue"))
+        .transpose()?;
+    let bigint_value = (expected_fields == FIELD_BIGINT)
+        .then(|| required_property::<BigInt>(&object, "bigintValue").and_then(bigint_to_i64))
+        .transpose()?;
+    let string_value = (expected_fields & FIELD_STRING != 0)
+        .then(|| required_string_property(&object, "stringValue", MAX_SNAPSHOT_BYTES, budget))
+        .transpose()?;
+    let context = (expected_fields & FIELD_CONTEXT != 0)
+        .then(|| required_string_property(&object, "context", MAX_SNAPSHOT_BYTES, budget))
+        .transpose()?;
+    let bytes_value = (expected_fields == FIELD_BYTES)
+        .then(|| {
+            let bytes = required_property::<BufferSlice>(&object, "bytesValue")?;
+            budget.charge(bytes.len())?;
+            copy_bytes(&bytes, "native bytes snapshot")
+        })
+        .transpose()?;
+    let items = (expected_fields == FIELD_ITEMS)
+        .then(|| {
+            let items = required_property::<Array>(&object, "items")?;
+            let length = items.len() as usize;
+            budget.ensure(allocation_size::<OwnedNativeValue>(length)?)?;
+            let mut snapshot = try_vec_with_capacity(length, "native list snapshot")?;
+            for index in 0..items.len() {
+                let item = items
+                    .get::<Unknown>(index)
+                    .map_err(|error| napi_conversion("list item", error))?
+                    .ok_or_else(|| BindingError::conversion("native list item is missing"))?;
+                snapshot.push(snapshot_unknown_value(item, depth + 1, budget, ancestors)?);
+            }
+            Ok::<_, BindingError>(snapshot)
+        })
+        .transpose()?;
+    let entries = (expected_fields == FIELD_ENTRIES)
+        .then(|| {
+            let entries = required_property::<Array>(&object, "entries")?;
+            let length = entries.len() as usize;
+            budget.ensure(allocation_size::<OwnedNativeEntry>(length)?)?;
+            let mut snapshot = try_vec_with_capacity(length, "native dictionary snapshot")?;
+            for index in 0..entries.len() {
+                let entry = entries
+                    .get::<Unknown>(index)
+                    .map_err(|error| napi_conversion("dictionary entry", error))?
+                    .ok_or_else(|| {
+                        BindingError::conversion("native dictionary entry is missing")
+                    })?;
+                snapshot.push(snapshot_unknown_entry(entry, depth, budget, ancestors)?);
+            }
+            Ok::<_, BindingError>(snapshot)
+        })
+        .transpose()?;
+
+    Ok(OwnedNativeValue {
+        tag,
+        bool_value,
+        number_value,
+        bigint_value,
+        string_value,
+        context,
+        bytes_value,
+        items,
+        entries,
+    })
+}
+
+fn snapshot_unknown_entry<'env>(
+    value: Unknown<'env>,
+    depth: usize,
+    budget: &mut SnapshotBudget,
+    ancestors: &mut Vec<Unknown<'env>>,
+) -> Result<OwnedNativeEntry, BindingError> {
+    if value
+        .get_type()
+        .map_err(|error| napi_conversion("dictionary entry", error))?
+        != ValueType::Object
+    {
+        return Err(BindingError::conversion(
+            "dictionary entry must be an object",
+        ));
+    }
+    let object = unsafe { value.cast::<Object>() }
+        .map_err(|error| napi_conversion("dictionary entry", error))?;
+    let mut keys = object_keys_limited(&object, 2, "dictionary entry")?;
+    keys.sort_unstable();
+    if keys.len() != 2 || keys[0] != "key" || keys[1] != "value" {
+        return Err(BindingError::conversion(
+            "dictionary entry must contain exactly key and value",
+        ));
+    }
+
+    budget.charge(size_of::<OwnedNativeEntry>())?;
+    let key = required_string_property(&object, "key", MAX_SNAPSHOT_BYTES, budget)?;
+    let child = required_property::<Unknown>(&object, "value")?;
+    Ok(OwnedNativeEntry {
+        key,
+        value: snapshot_unknown_value(child, depth + 1, budget, ancestors)?,
+    })
+}
+
+pub(crate) fn snapshot_native_value(value: Unknown<'_>) -> Result<OwnedNativeValue, BindingError> {
+    let mut budget = SnapshotBudget::new(MAX_SNAPSHOT_BYTES);
+    snapshot_unknown_value(value, 0, &mut budget, &mut Vec::new())
+}
+
+pub(crate) fn snapshot_native_values(
+    values: Array<'_>,
+) -> Result<Vec<OwnedNativeValue>, BindingError> {
+    let length = values.len() as usize;
+    if length > 8 {
+        return Err(BindingError::conversion("Too many arguments (8 max)"));
+    }
+    let mut budget = SnapshotBudget::new(MAX_SNAPSHOT_BYTES);
+    budget.ensure(allocation_size::<OwnedNativeValue>(length)?)?;
+    let mut snapshot = try_vec_with_capacity(length, "native argument snapshot")?;
+    let mut ancestors = Vec::new();
+    for index in 0..values.len() {
+        let value = values
+            .get::<Unknown>(index)
+            .map_err(|error| napi_conversion("native argument", error))?
+            .ok_or_else(|| BindingError::conversion("native argument is missing"))?;
+        snapshot.push(snapshot_unknown_value(
+            value,
+            0,
+            &mut budget,
+            &mut ancestors,
+        )?);
+    }
+    Ok(snapshot)
+}
+
 fn validate_q_symbol(value: &str, field: &str) -> Result<(), BindingError> {
     if value.as_bytes().contains(&0) {
         return Err(BindingError::conversion(format!(
@@ -504,12 +913,7 @@ fn k_into_native_with_depth(value: K, depth: usize) -> Result<NativeValue, Bindi
     Ok(native)
 }
 
-pub(crate) fn snapshot_native_values(
-    values: Vec<NativeValue>,
-) -> Result<Vec<OwnedNativeValue>, BindingError> {
-    snapshot_native_values_with_limit(values, MAX_SNAPSHOT_BYTES)
-}
-
+#[cfg(test)]
 fn snapshot_native_values_with_limit(
     values: Vec<NativeValue>,
     limit: usize,
@@ -518,10 +922,12 @@ fn snapshot_native_values_with_limit(
         return Err(BindingError::conversion("Too many arguments (8 max)"));
     }
     let mut budget = SnapshotBudget::new(limit);
-    values
-        .into_iter()
-        .map(|value| OwnedNativeValue::snapshot(value, 0, &mut budget))
-        .collect()
+    budget.ensure(allocation_size::<OwnedNativeValue>(values.len())?)?;
+    let mut snapshot = try_vec_with_capacity(values.len(), "native argument snapshot")?;
+    for value in values {
+        snapshot.push(OwnedNativeValue::snapshot(value, 0, &mut budget)?);
+    }
+    Ok(snapshot)
 }
 
 fn empty_native_value() -> NativeValue {
@@ -614,23 +1020,37 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_tags_and_missing_payloads() {
+    fn rejects_unknown_tags_and_inconsistent_payloads_before_conversion() {
         let mut unknown = empty_native_value();
         unknown.tag = "mystery".into();
-        let unknown_error = OwnedNativeValue::try_from(unknown)
-            .expect("snapshot unknown tag")
-            .into_k()
-            .expect_err("unknown tag must fail");
+        let unknown_error = OwnedNativeValue::try_from(unknown).expect_err("unknown tag must fail");
 
         let mut missing = empty_native_value();
         missing.tag = "i64".into();
-        let missing_error = OwnedNativeValue::try_from(missing)
-            .expect("snapshot missing payload")
-            .into_k()
-            .expect_err("missing payload must fail");
+        let missing_error =
+            OwnedNativeValue::try_from(missing).expect_err("missing payload must fail");
 
-        assert_eq!(unknown_error.code, "KOLA_CONVERSION");
-        assert_eq!(missing_error.code, "KOLA_CONVERSION");
+        let mut extraneous = empty_native_value();
+        extraneous.tag = "null".into();
+        extraneous.bool_value = Some(false);
+        let extraneous_error =
+            OwnedNativeValue::try_from(extraneous).expect_err("extraneous payload must fail");
+
+        let mut inconsistent = empty_native_value();
+        inconsistent.tag = "list".into();
+        inconsistent.items = Some(Vec::new());
+        inconsistent.entries = Some(Vec::new());
+        let inconsistent_error =
+            OwnedNativeValue::try_from(inconsistent).expect_err("inconsistent payload must fail");
+
+        for error in [
+            unknown_error,
+            missing_error,
+            extraneous_error,
+            inconsistent_error,
+        ] {
+            assert_eq!(error.code, "KOLA_CONVERSION");
+        }
     }
 
     #[test]
@@ -691,10 +1111,8 @@ mod tests {
         let mut missing_context = empty_native_value();
         missing_context.tag = "lambda".into();
         missing_context.string_value = Some("{x+y}".into());
-        let context_error = OwnedNativeValue::try_from(missing_context)
-            .expect("snapshot lambda")
-            .into_k()
-            .expect_err("missing explicit context must fail");
+        let context_error =
+            OwnedNativeValue::try_from(missing_context).expect_err("missing context must fail");
         assert_eq!(context_error.code, "KOLA_CONVERSION");
 
         let mut nul_source = empty_native_value();
@@ -799,12 +1217,13 @@ mod tests {
             .expect("snapshot symbol")
             .into_k()
             .expect_err("NUL symbol must fail");
-
+        let mut null = empty_native_value();
+        null.tag = "null".into();
         let mut dictionary = empty_native_value();
         dictionary.tag = "dictionary".into();
         dictionary.entries = Some(vec![NativeEntry {
             key: "bad\0key".into(),
-            value: empty_native_value(),
+            value: null,
         }]);
         let key_error = OwnedNativeValue::try_from(dictionary)
             .expect("snapshot dictionary")
@@ -834,6 +1253,21 @@ mod tests {
             Err(error) => error,
             Ok(_) => panic!("deep dictionary output must fail"),
         };
+        assert_eq!(error.code, "KOLA_CONVERSION");
+    }
+
+    #[test]
+    fn bounds_native_input_recursion_before_conversion() {
+        let mut value = empty_native_value();
+        value.tag = "null".into();
+        for _ in 0..=MAX_VALUE_DEPTH {
+            let mut parent = empty_native_value();
+            parent.tag = "list".into();
+            parent.items = Some(vec![value]);
+            value = parent;
+        }
+
+        let error = OwnedNativeValue::try_from(value).expect_err("deep input must fail");
         assert_eq!(error.code, "KOLA_CONVERSION");
     }
 

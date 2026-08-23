@@ -39,9 +39,13 @@ conn = kola.Q('localhost', 1800, enable_tls=True, retries=3, timeout=30)
 | `port`       | `int`  |         | Port of the q process                              |
 | `user`       | `str`  | `""`    | Username (defaults to OS login user)               |
 | `passwd`     | `str`  | `""`    | Password                                           |
-| `enable_tls` | `bool` | `False` | Enable TLS encryption                              |
+| `enable_tls` | `bool` | `False` | Enable TLS with platform certificate verification |
 | `retries`    | `int`  | `0`     | Number of retries with exponential backoff          |
 | `timeout`    | `int`  | `0`     | Connection timeout in seconds (0 = no timeout)     |
+
+### Temporal range and precision
+
+Python `datetime`, `time`, and `timedelta` values have microsecond precision. q timestamp or timespan atoms with non-zero sub-microsecond nanoseconds raise `ValueError` instead of being truncated. q date or datetime atoms outside Python's representable range raise `OverflowError` instead of being clamped.
 
 ### Connect / Disconnect
 

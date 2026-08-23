@@ -205,4 +205,4 @@ Other operating-system, CPU, and libc combinations are unsupported in the initia
 
 ## TLS certificate behavior
 
-**`tls: true` encrypts the connection but currently accepts certificates without normal certificate verification. It does not authenticate the server identity and is vulnerable to an active man-in-the-middle.** Do not describe it as certificate-verified TLS or rely on it for server authentication. Use it only where this limitation is acceptable, such as behind a separately authenticated tunnel, until the native connector implements certificate verification.
+`tls: true` encrypts the connection and verifies the server certificate and hostname against the operating system's trusted certificate store. Connections with an invalid, expired, untrusted, or hostname-mismatched certificate fail.
