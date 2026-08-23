@@ -74,11 +74,7 @@ macro_rules! impl_wire_number {
             const WIDTH: usize = $width;
 
             fn from_le_chunk(chunk: &[u8]) -> Self {
-                <$number>::from_le_bytes(
-                    chunk
-                        .try_into()
-                        .expect("chunks_exact always yields the requested width"),
-                )
+                <$number>::from_le_bytes(chunk.try_into().expect("validated chunk width"))
             }
 
             fn write_le_bytes(self, output: &mut Vec<u8>) {
@@ -95,13 +91,21 @@ impl_wire_number!(f32, 4);
 impl_wire_number!(f64, 8);
 
 fn decode_wire_numbers<T: WireNumber>(bytes: &[u8], context: &str) -> Result<Vec<T>, KolaError> {
-    let mut chunks = bytes.chunks_exact(T::WIDTH);
-    let values = chunks.by_ref().map(T::from_le_chunk).collect::<Vec<_>>();
-    if !chunks.remainder().is_empty() {
-        return Err(KolaError::DeserializationErr(format!(
-            "{context} payload has {} trailing byte(s)",
-            chunks.remainder().len()
-        )));
+    let value_count = bytes.len() / T::WIDTH;
+    let mut values = Vec::new();
+    values.try_reserve_exact(value_count).map_err(|error| {
+        KolaError::DeserializationErr(format!(
+            "unable to allocate {context} with {value_count} values: {error}"
+        ))
+    })?;
+    for chunk in bytes.chunks(T::WIDTH) {
+        if chunk.len() != T::WIDTH {
+            return Err(KolaError::DeserializationErr(format!(
+                "{context} payload has {} trailing byte(s)",
+                chunk.len()
+            )));
+        }
+        values.push(T::from_le_chunk(chunk));
     }
     Ok(values)
 }

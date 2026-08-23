@@ -52,7 +52,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install JavaScript dependencies
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
       - name: Build release native addon
         run: npm run build:native:release -- --target x86_64-pc-windows-msvc
       - name: Build TypeScript
@@ -113,7 +113,7 @@ jobs:
         run: cargo test --locked -p kola -p napi-kola
 
       - name: Install JavaScript dependencies
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
       - name: Build release native addon
         run: npm run build:native:release -- --target x86_64-unknown-linux-gnu
       - name: Build TypeScript
@@ -169,7 +169,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install JavaScript dependencies
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
       - name: Build release native addon
         run: npm run build:native:release -- --target aarch64-apple-darwin
       - name: Build TypeScript
