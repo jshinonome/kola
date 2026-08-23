@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   KolaIOError,
+  KolaQLambda,
+  KolaQOperator,
   KolaTimestamp,
   Q,
   serializeAsIpcBytes6,
@@ -89,6 +91,43 @@ describe.runIf(liveEnabled)("live q IPC", () => {
     expect(Buffer.isBuffer(result)).toBe(true);
     expect(result).toEqual(Buffer.from(bytes));
   });
+  it("round-trips q operators and lambdas as first-class values", async () => {
+    const q = trackedQ();
+    const expression = "{[op;a;b] .[op;(a;b)]}";
+
+    await expect(q.sync(expression, KolaQOperator.PLUS, 1, 2)).resolves.toBe(3);
+    await expect(
+      q.sync(expression, new KolaQLambda("{x+y}"), 1, 2),
+    ).resolves.toBe(3);
+
+    const operator = await q.sync("+");
+    expect(operator).toBeInstanceOf(KolaQOperator);
+    expect((operator as KolaQOperator).name).toBe("+");
+    await expect(
+      q.sync(expression, operator as KolaQOperator, 1, 2),
+    ).resolves.toBe(3);
+
+    const lambda = await q.sync("{x+y}");
+    expect(lambda).toBeInstanceOf(KolaQLambda);
+    expect((lambda as KolaQLambda).source).toBe("{x+y}");
+    expect((lambda as KolaQLambda).context).toBe("");
+    await expect(
+      q.sync(expression, lambda as KolaQLambda, 1, 2),
+    ).resolves.toBe(3);
+
+    await expect(
+      serializeAsIpcBytes6("sync", false, KolaQOperator.PLUS),
+    ).resolves.toEqual(Buffer.from([1, 1, 0, 0, 10, 0, 0, 0, 102, 1]));
+    await expect(
+      serializeAsIpcBytes6("sync", false, new KolaQLambda("{x+y}")),
+    ).resolves.toEqual(
+      Buffer.from([
+        1, 1, 0, 0, 21, 0, 0, 0, 100, 0, 10, 0, 5, 0, 0, 0, 123, 120, 43, 121,
+        125,
+      ]),
+    );
+  });
+
 
   it("reads and q-acknowledges an Arrow table send", async () => {
     const q = await trackedConnectedQ();

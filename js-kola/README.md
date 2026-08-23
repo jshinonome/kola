@@ -59,6 +59,26 @@ const value = await q.sync("42");
 
 Always call `disconnect()` in `finally` or an equivalent cleanup hook instead of relying on garbage collection.
 
+### Operators and lambdas
+
+Pass q primitives and arbitrary lambdas as first-class arguments:
+
+```ts
+import { KolaQLambda, KolaQOperator } from "kola-q";
+
+await q.sync("{[op;a;b] .[op;(a;b)]}", KolaQOperator.PLUS, 1, 2);
+await q.sync(
+  "{[op;a;b] .[op;(a;b)]}",
+  new KolaQLambda("{x+y}"),
+  1,
+  2,
+);
+
+const scoped = new KolaQLambda("{x+y}", "analytics");
+```
+
+`new KolaQOperator(name)` accepts supported q primitive names such as `"+"`; it does not expose wire opcodes. `new KolaQLambda(source, context = "")` preserves its source text, requires a brace-delimited UTF-8 body (optionally prefixed with `k)`), rejects NUL bytes in both fields, and rejects context values beginning with `"."`. The context `"analytics"` represents q namespace `.analytics` because the wire context omits the leading dot. Lambda source is executable q code: construct it only from trusted input.
+
 ## Value mapping
 
 ### JavaScript to q
@@ -79,6 +99,8 @@ Always call `disconnect()` in `finally` or an equivalent cleanup hook instead of
 | `KolaDate` | date in `YYYY-MM-DD` form |
 | `KolaTime` | millisecond-aligned nanoseconds since midnight |
 | `KolaTimespan` | signed nanosecond duration |
+| `KolaQOperator` | supported primitive operator |
+| `KolaQLambda` | lambda source and q context |
 
 ### q to JavaScript
 
@@ -93,6 +115,8 @@ Always call `disconnect()` in `finally` or an equivalent cleanup hook instead of
 | date | `KolaDate` |
 | time | `KolaTime` with a `bigint` nanosecond payload |
 | timespan | `KolaTimespan` with a `bigint` nanosecond payload |
+| primitive operator | `KolaQOperator` |
+| lambda | `KolaQLambda` |
 | typed list | Apache Arrow `Vector` |
 | mixed list | array |
 | dictionary | plain string-keyed object |

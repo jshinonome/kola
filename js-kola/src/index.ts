@@ -3,6 +3,8 @@ export { readBinary6, serializeAsIpcBytes6 } from "./helpers.js";
 export { Q } from "./q.js";
 export {
   KolaDate,
+  KolaQLambda,
+  KolaQOperator,
   KolaTime,
   KolaTimespan,
   KolaTimestamp,

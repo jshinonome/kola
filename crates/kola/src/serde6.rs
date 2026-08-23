@@ -51,8 +51,8 @@ const K_TYPE_NAME: [&str; 20] = [
 use crate::{
     errors::KolaError,
     types::{
-        get_series_len, validate_guid_series, validate_q_symbol, validate_q_time_series, K,
-        K_TYPE_SIZE, MAX_VALUE_DEPTH,
+        get_series_len, validate_guid_series, validate_q_symbol, validate_q_time_series, QLambda,
+        QOperator, K, K_TYPE_SIZE, MAX_VALUE_DEPTH,
     },
 };
 
@@ -103,6 +103,65 @@ fn unix_timestamp_nanoseconds(q_nanoseconds: i64) -> Result<i64, KolaError> {
             "finite q timestamp is outside the Unix nanosecond range".to_string(),
         )
     })
+}
+fn deserialize_lambda(vec: &[u8], pos: &mut usize, start_pos: usize) -> Result<K, KolaError> {
+    let context_tail = vec
+        .get(start_pos..)
+        .ok_or_else(|| KolaError::DeserializationErr("q lambda omitted its context".to_string()))?;
+    let context_length = context_tail
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| {
+            KolaError::DeserializationErr("q lambda context is not NUL-terminated".to_string())
+        })?;
+    let context_end = start_pos
+        .checked_add(context_length)
+        .ok_or_else(|| KolaError::DeserializationErr("q lambda context overflowed".to_string()))?;
+    let context = std::str::from_utf8(&vec[start_pos..context_end]).map_err(|error| {
+        KolaError::DeserializationErr(format!("q lambda context is not valid UTF-8: {error}"))
+    })?;
+    let vector_start = context_end.checked_add(1).ok_or_else(|| {
+        KolaError::DeserializationErr("q lambda source offset overflowed".to_string())
+    })?;
+    let vector_end = vector_start.checked_add(6).ok_or_else(|| {
+        KolaError::DeserializationErr("q lambda source header overflowed".to_string())
+    })?;
+    let header = vec.get(vector_start..vector_end).ok_or_else(|| {
+        KolaError::DeserializationErr(
+            "q lambda omitted its type-10 character-vector source".to_string(),
+        )
+    })?;
+    if header[0] != 10 {
+        return Err(KolaError::DeserializationErr(format!(
+            "q lambda source must be a type-10 character vector, got type {}",
+            header[0]
+        )));
+    }
+    if header[1] != 0 {
+        return Err(KolaError::DeserializationErr(format!(
+            "q lambda source has unsupported attribute {}",
+            header[1]
+        )));
+    }
+    let source_length = i32::from_le_bytes(header[2..6].try_into().unwrap());
+    let source_length = usize::try_from(source_length).map_err(|_| {
+        KolaError::DeserializationErr("q lambda source length cannot be negative".to_string())
+    })?;
+    let source_end = vector_end.checked_add(source_length).ok_or_else(|| {
+        KolaError::DeserializationErr("q lambda source length overflowed".to_string())
+    })?;
+    let source = std::str::from_utf8(vec.get(vector_end..source_end).ok_or_else(|| {
+        KolaError::DeserializationErr(format!(
+            "q lambda source length {source_length} exceeds the available payload"
+        ))
+    })?)
+    .map_err(|error| {
+        KolaError::DeserializationErr(format!("q lambda source is not valid UTF-8: {error}"))
+    })?;
+    let lambda = QLambda::with_context(source, context)
+        .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
+    *pos = source_end;
+    Ok(K::Lambda(lambda))
 }
 
 pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, KolaError> {
@@ -415,12 +474,20 @@ fn deserialize_unchecked(
                 .map(K::DataFrame)
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))
         }
-        101 => {
+        100 => deserialize_lambda(vec, pos, start_pos),
+        101..=103 => {
+            let opcode = *vec.get(start_pos).ok_or_else(|| {
+                KolaError::DeserializationErr(format!(
+                    "q primitive type {k_type} omitted its opcode"
+                ))
+            })?;
             *pos += 1;
-            if vec[start_pos] == 0 {
+            if k_type == 101 && opcode == 0 {
                 Ok(K::Null)
             } else {
-                Err(KolaError::NotSupportedKOperatorErr(vec[*pos]))
+                QOperator::from_wire(k_type, opcode)
+                    .map(K::Operator)
+                    .ok_or(KolaError::NotSupportedKOperatorErr(opcode))
             }
         }
         // q error
@@ -1406,6 +1473,20 @@ fn serialize_with_depth(k: &K, depth: usize) -> Result<Vec<u8>, KolaError> {
                 vec.write_all(&value).unwrap();
             }
         }
+        K::Operator(operator) => {
+            vec = Vec::with_capacity(k_length);
+            let (k_type, opcode) = operator.wire_value();
+            vec.write_all(&[k_type, opcode]).unwrap();
+        }
+        K::Lambda(lambda) => {
+            let source_length = q_list_length_from_usize(lambda.source().len())?;
+            vec = Vec::with_capacity(k_length);
+            vec.write_all(&[100]).unwrap();
+            vec.write_all(lambda.context().as_bytes()).unwrap();
+            vec.write_all(&[0, 10, 0]).unwrap();
+            vec.write_all(&source_length).unwrap();
+            vec.write_all(lambda.source().as_bytes()).unwrap();
+        }
         // to (::)
         K::Null => {
             vec = Vec::with_capacity(k_length);
@@ -2040,7 +2121,10 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
 
 #[cfg(test)]
 mod tests {
-    use crate::types::MIN_Q_TIMESTAMP_UNIX_NANOS;
+    use crate::types::{
+        QLambda, QOperator, MIN_Q_TIMESTAMP_UNIX_NANOS, Q_BINARY_PRIMITIVES, Q_TERNARY_PRIMITIVES,
+        Q_UNARY_PRIMITIVES,
+    };
     use indexmap::IndexMap;
     use polars::prelude::{CompatLevel, NamedFrom};
     use polars_arrow::{
@@ -2906,6 +2990,169 @@ mod tests {
     fn serialize_time() {
         let k = K::Time(NaiveTime::from_hms_milli_opt(0, 17, 24, 70).unwrap());
         assert_eq!(serialize(&k).unwrap(), [237, 102, 238, 15, 0]);
+    }
+    #[test]
+    fn primitive_operators_have_exact_wire_values_and_round_trip() {
+        let plus = K::Operator(QOperator::PLUS);
+        assert_eq!(plus.j6_len().unwrap(), 2);
+        assert_eq!(plus.get_j_type_code(), 102);
+        assert_eq!(serialize(&plus).unwrap(), [102, 1]);
+        assert_eq!(
+            deserialize(&[102, 1], &mut 0, false).unwrap(),
+            K::Operator(QOperator::PLUS)
+        );
+
+        for (k_type, primitives) in [
+            (101, Q_UNARY_PRIMITIVES.as_slice()),
+            (102, Q_BINARY_PRIMITIVES.as_slice()),
+            (103, Q_TERNARY_PRIMITIVES.as_slice()),
+        ] {
+            for (opcode, name) in primitives.iter().enumerate() {
+                if name.is_empty() {
+                    continue;
+                }
+                let operator = QOperator::new(name).expect("documented primitive name");
+                let bytes = [k_type, opcode as u8];
+                assert_eq!(K::Operator(operator).get_j_type_code(), i16::from(k_type));
+                assert_eq!(serialize(&K::Operator(operator)).unwrap(), bytes);
+                assert_eq!(
+                    deserialize(&bytes, &mut 0, false).unwrap(),
+                    K::Operator(operator)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn null_and_unsupported_operator_values_remain_distinct() {
+        assert!(QOperator::new("::").is_err());
+        assert!(QOperator::new("plus").is_err());
+        assert!(QOperator::new("+\0").is_err());
+        assert_eq!(deserialize(&[101, 0], &mut 0, false).unwrap(), K::Null);
+
+        for bytes in [[101, 42], [102, 34], [103, 3]] {
+            assert!(matches!(
+                deserialize(&bytes, &mut 0, false),
+                Err(KolaError::NotSupportedKOperatorErr(_))
+            ));
+        }
+        for k_type in 104..=112 {
+            assert!(matches!(
+                deserialize(&[k_type, 0], &mut 0, false),
+                Err(KolaError::NotSupportedKTypeErr(value)) if value == k_type
+            ));
+        }
+    }
+
+    #[test]
+    fn lambdas_have_exact_root_and_context_wire_values_and_round_trip() {
+        let root = QLambda::new("{x+y}").unwrap();
+        let root_bytes = [100, 0, 10, 0, 5, 0, 0, 0, b'{', b'x', b'+', b'y', b'}'];
+        assert_eq!(K::Lambda(root.clone()).j6_len().unwrap(), root_bytes.len());
+        assert_eq!(serialize(&K::Lambda(root.clone())).unwrap(), root_bytes);
+        assert_eq!(K::Lambda(root.clone()).get_j_type_code(), 100);
+        let mut root_pos = 0;
+        assert_eq!(
+            deserialize(&root_bytes, &mut root_pos, false).unwrap(),
+            K::Lambda(root)
+        );
+        assert_eq!(root_pos, root_bytes.len());
+
+        let contextual = QLambda::with_context(" {x*2} ", "ctx").unwrap();
+        let contextual_bytes = [
+            100, b'c', b't', b'x', 0, 10, 0, 7, 0, 0, 0, b' ', b'{', b'x', b'*', b'2', b'}', b' ',
+        ];
+        assert_eq!(
+            K::Lambda(contextual.clone()).j6_len().unwrap(),
+            contextual_bytes.len()
+        );
+        assert_eq!(
+            serialize(&K::Lambda(contextual.clone())).unwrap(),
+            contextual_bytes
+        );
+        assert_eq!(
+            deserialize(&contextual_bytes, &mut 0, false).unwrap(),
+            K::Lambda(contextual.clone())
+        );
+        assert_eq!(
+            contextual.clone().into_parts(),
+            (" {x*2} ".to_string(), "ctx".to_string())
+        );
+
+        let k_dialect = QLambda::new(" k){x+y} ").unwrap();
+        let k_dialect_bytes = serialize(&K::Lambda(k_dialect.clone())).unwrap();
+        assert_eq!(
+            deserialize(&k_dialect_bytes, &mut 0, false).unwrap(),
+            K::Lambda(k_dialect)
+        );
+    }
+
+    #[test]
+    fn lambda_validation_and_malformed_frames_fail_explicitly() {
+        assert!(QLambda::new("x+y").is_err());
+        assert!(QLambda::new("k)x+y").is_err());
+        assert!(QLambda::new("{x\0+y}").is_err());
+        assert!(QLambda::with_context("{x+y}", "bad\0context").is_err());
+        assert!(QLambda::with_context("{x+y}", ".ctx")
+            .unwrap_err()
+            .to_string()
+            .contains("q lambda context omits the leading dot"));
+
+        let malformed = [
+            vec![100],
+            vec![100, 0, 11, 0, 0, 0, 0, 0],
+            vec![100, 0, 10, 1, 2, 0, 0, 0, b'{', b'}'],
+            vec![100, 0, 10, 0, 255, 255, 255, 255],
+            vec![100, 0, 10, 0, 2, 0, 0, 0, b'{'],
+            vec![100, 0, 10, 0, 1, 0, 0, 0, 0xff],
+            vec![100, 0, 10, 0, 1, 0, 0, 0, b'x'],
+            vec![100, 0, 10, 0, 3, 0, 0, 0, b'{', 0, b'}'],
+        ];
+        for bytes in malformed {
+            assert!(
+                matches!(
+                    deserialize(&bytes, &mut 0, false),
+                    Err(KolaError::DeserializationErr(_))
+                ),
+                "malformed lambda unexpectedly decoded: {bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn operator_and_lambda_ipc_frames_have_exact_declared_lengths() {
+        let plus = crate::io::generate_j6_ipc_msg(
+            crate::types::MsgType::Sync,
+            false,
+            K::Operator(QOperator::PLUS),
+        )
+        .unwrap();
+        assert_eq!(plus, [1, 1, 0, 0, 10, 0, 0, 0, 102, 1]);
+
+        let root = crate::io::generate_j6_ipc_msg(
+            crate::types::MsgType::Sync,
+            false,
+            K::Lambda(QLambda::new("{x+y}").unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            root,
+            [1, 1, 0, 0, 21, 0, 0, 0, 100, 0, 10, 0, 5, 0, 0, 0, b'{', b'x', b'+', b'y', b'}',]
+        );
+
+        let contextual = crate::io::generate_j6_ipc_msg(
+            crate::types::MsgType::Sync,
+            false,
+            K::Lambda(QLambda::with_context("{x+y}", "ctx").unwrap()),
+        )
+        .unwrap();
+        assert_eq!(
+            contextual,
+            [
+                1, 1, 0, 0, 24, 0, 0, 0, 100, b'c', b't', b'x', 0, 10, 0, 5, 0, 0, 0, b'{', b'x',
+                b'+', b'y', b'}',
+            ]
+        );
     }
 
     #[test]

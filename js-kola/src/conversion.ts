@@ -5,9 +5,13 @@ import { conversionError, mapNativeError } from "./errors.js";
 import type { NativeEntry, NativeResult, NativeValue } from "./native-contract.js";
 import {
   KolaDate,
+  KolaQLambda,
+  KolaQOperator,
   KolaTime,
   KolaTimespan,
   KolaTimestamp,
+  validatedQLambdaParts,
+  validatedQOperatorName,
   type KolaInput,
   type KolaValue,
 } from "./types.js";
@@ -78,6 +82,17 @@ function normalizeInputAtDepth(
     return {
       tag: "bytes",
       bytesValue: Buffer.from(value.buffer, value.byteOffset, value.byteLength),
+    };
+  }
+  if (value instanceof KolaQOperator) {
+    return { tag: "operator", stringValue: validatedQOperatorName(value) };
+  }
+  if (value instanceof KolaQLambda) {
+    const { source, context } = validatedQLambdaParts(value);
+    return {
+      tag: "lambda",
+      stringValue: source,
+      context,
     };
   }
   if (value instanceof KolaTimestamp) {
@@ -181,6 +196,13 @@ function requiredString(value: NativeValue): string {
   return value.stringValue;
 }
 
+function requiredContext(value: NativeValue): string {
+  if (typeof value.context !== "string") {
+    throw conversionError(`Native ${value.tag} value omitted context`);
+  }
+  return value.context;
+}
+
 function requiredBytes(value: NativeValue): Uint8Array {
   if (!(value.bytesValue instanceof Uint8Array)) {
     throw conversionError(`Native ${value.tag} value omitted bytesValue`);
@@ -231,6 +253,10 @@ export function normalizeOutput(value: NativeValue): KolaValue {
     case "symbol":
     case "string":
       return requiredString(value);
+    case "operator":
+      return new KolaQOperator(requiredString(value));
+    case "lambda":
+      return new KolaQLambda(requiredString(value), requiredContext(value));
     case "bytes": {
       const bytes = requiredBytes(value);
       return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);

@@ -2,13 +2,85 @@ use crate::error::PyKolaError::{self, PythonErr};
 use chrono::{Datelike, Timelike};
 use indexmap::IndexMap;
 use kola::connector::Connector;
-use kola::types::{MsgType, K};
+use kola::types::{MsgType, QLambda, QOperator, K};
 use pyo3::types::{
     PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList, PyString, PyTime,
     PyTuple, PyTzInfo,
 };
 use pyo3::{intern, prelude::*, IntoPyObjectExt};
 use pyo3_polars::{PyDataFrame, PySeries};
+
+#[pyclass(frozen, eq, module = "kola", skip_from_py_object)]
+#[derive(Clone, Eq, PartialEq)]
+pub struct KolaQOperator {
+    operator: QOperator,
+}
+
+#[pymethods]
+impl KolaQOperator {
+    #[new]
+    fn new(name: &str) -> Result<Self, PyKolaError> {
+        Ok(Self {
+            operator: QOperator::new(name)?,
+        })
+    }
+
+    #[classattr]
+    #[pyo3(name = "PLUS")]
+    fn plus() -> Self {
+        Self {
+            operator: QOperator::PLUS,
+        }
+    }
+
+    #[getter]
+    fn name(&self) -> &str {
+        self.operator.name()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("KolaQOperator({:?})", self.operator.name())
+    }
+}
+
+#[pyclass(frozen, eq, module = "kola", skip_from_py_object)]
+#[derive(Clone, Eq, PartialEq)]
+pub struct KolaQLambda {
+    lambda: QLambda,
+}
+
+#[pymethods]
+impl KolaQLambda {
+    #[new]
+    #[pyo3(signature = (source, context = ""))]
+    fn new(source: &str, context: &str) -> Result<Self, PyKolaError> {
+        Ok(Self {
+            lambda: QLambda::with_context(source, context)?,
+        })
+    }
+
+    #[getter]
+    fn source(&self) -> &str {
+        self.lambda.source()
+    }
+
+    #[getter]
+    fn context(&self) -> &str {
+        self.lambda.context()
+    }
+
+    fn __repr__(&self) -> String {
+        if self.lambda.context().is_empty() {
+            format!("KolaQLambda({:?})", self.lambda.source())
+        } else {
+            format!(
+                "KolaQLambda({:?}, {:?})",
+                self.lambda.source(),
+                self.lambda.context()
+            )
+        }
+    }
+}
 
 #[pyclass]
 pub struct KolaConnector {
@@ -139,6 +211,8 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<Py<PyAny>> {
         }
         K::Series(k) => PySeries(k).into_py_any(py),
         K::DataFrame(k) => PyDataFrame(k).into_py_any(py),
+        K::Operator(operator) => Ok(Py::new(py, KolaQOperator { operator })?.into_any()),
+        K::Lambda(lambda) => Ok(Py::new(py, KolaQLambda { lambda })?.into_any()),
         K::Null => ().into_py_any(py),
         K::Dict(dict) => {
             let py_dict = PyDict::new(py);
@@ -211,7 +285,13 @@ fn cast_to_k_vec(tuple: Bound<PyTuple>) -> Result<Vec<K>, PyKolaError> {
 }
 
 fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
-    if any.is_instance_of::<PyBool>() {
+    if any.is_instance_of::<KolaQOperator>() {
+        let value = any.extract::<PyRef<KolaQOperator>>()?;
+        Ok(K::Operator(value.operator))
+    } else if any.is_instance_of::<KolaQLambda>() {
+        let value = any.extract::<PyRef<KolaQLambda>>()?;
+        Ok(K::Lambda(value.lambda.clone()))
+    } else if any.is_instance_of::<PyBool>() {
         Ok(K::Boolean(any.extract::<bool>()?))
         // TODO: this heap allocs on failure
     } else if any.is_instance_of::<PyInt>() {

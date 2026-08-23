@@ -78,6 +78,22 @@ conn.sync(
 )
 ```
 
+### Operators and Lambdas
+
+Pass q primitives and arbitrary lambdas as first-class arguments:
+
+```python
+from kola import KolaQLambda, KolaQOperator
+
+conn.sync("{[op;a;b] .[op;(a;b)]}", KolaQOperator.PLUS, 1, 2)
+conn.sync("{[op;a;b] .[op;(a;b)]}", KolaQLambda("{x+y}"), 1, 2)
+
+# A non-root q context can be supplied explicitly.
+scoped = KolaQLambda("{x+y}", "analytics")
+```
+
+`KolaQOperator(name)` accepts supported q primitive names such as `"+"`; it does not expose wire opcodes. `KolaQLambda(source, context="")` preserves its source text, requires a brace-delimited UTF-8 body (optionally prefixed with `k)`), rejects NUL bytes in both fields, and rejects context values beginning with `"."`. The context `"analytics"` represents q namespace `.analytics` because the wire context omits the leading dot. Lambda source is executable q code: construct it only from trusted input.
+
 ### Send DataFrame
 
 ```python
@@ -212,6 +228,8 @@ except KolaError:
 | `minute`    | 17  | 4    | `time`       | 00:00 - 23:59               |
 | `second`    | 18  | 4    | `time`       | 00:00:00 - 23:59:59         |
 | `time`      | 19  | 4    | `time`       | 00:00:00.000 - 23:59:59.999 |
+| `primitive` | 101-103 | 1   | `KolaQOperator` | supported unary/binary/ternary primitive |
+| `lambda`    | 100 | \*   | `KolaQLambda` | source and q context |
 
 #### List / Table
 
@@ -265,6 +283,8 @@ except KolaError:
 | `date`       | `date`      | 0001.01.01 - 9999.12.31     |
 | `timedelta`  | `timespan`  |                             |
 | `time`       | `time`      | 00:00:00.000 - 23:59:59.999 |
+| `KolaQOperator` | primitive | supported primitive name |
+| `KolaQLambda` | lambda | source and q context |
 
 #### Series, DataFrame, and Dictionary
 

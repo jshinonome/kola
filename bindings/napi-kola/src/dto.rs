@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Timelike, Utc};
 use indexmap::IndexMap;
-use kola::types::{K, MIN_Q_TIMESTAMP_UNIX_NANOS};
+use kola::types::{QLambda, QOperator, K, MIN_Q_TIMESTAMP_UNIX_NANOS};
 use napi::bindgen_prelude::{BigInt, Buffer};
 use napi_derive::napi;
 use std::mem::size_of;
@@ -38,6 +38,7 @@ pub struct NativeValue {
     pub number_value: Option<f64>,
     pub bigint_value: Option<BigInt>,
     pub string_value: Option<String>,
+    pub context: Option<String>,
     pub bytes_value: Option<Buffer>,
     pub items: Option<Vec<NativeValue>>,
     pub entries: Option<Vec<NativeEntry>>,
@@ -97,6 +98,7 @@ pub(crate) struct OwnedNativeValue {
     number_value: Option<f64>,
     bigint_value: Option<i64>,
     string_value: Option<String>,
+    context: Option<String>,
     bytes_value: Option<Vec<u8>>,
     items: Option<Vec<OwnedNativeValue>>,
     entries: Option<Vec<OwnedNativeEntry>>,
@@ -154,6 +156,9 @@ impl OwnedNativeValue {
         if let Some(string) = &value.string_value {
             budget.charge(string.len())?;
         }
+        if let Some(context) = &value.context {
+            budget.charge(context.len())?;
+        }
         if let Some(bytes) = &value.bytes_value {
             budget.charge(bytes.len())?;
         }
@@ -204,6 +209,7 @@ impl OwnedNativeValue {
             number_value: value.number_value,
             bigint_value,
             string_value: value.string_value,
+            context: value.context,
             bytes_value: value.bytes_value.map(|bytes| bytes.as_ref().to_vec()),
             items,
             entries,
@@ -243,6 +249,16 @@ impl OwnedNativeValue {
                 Ok(K::Symbol(value))
             }
             "string" => Ok(K::String(self.required_string()?)),
+            "operator" => QOperator::new(&self.required_string()?)
+                .map(K::Operator)
+                .map_err(BindingError::from),
+            "lambda" => {
+                let source = self.required_string()?;
+                let context = self.required_context()?;
+                QLambda::with_context(source, context)
+                    .map(K::Lambda)
+                    .map_err(BindingError::from)
+            }
             "bytes" => Ok(K::CharVector(self.required_bytes()?)),
             "timestamp" => {
                 let nanos = self.required_bigint()?;
@@ -347,6 +363,12 @@ impl OwnedNativeValue {
             .ok_or_else(|| BindingError::conversion(format!("{} requires stringValue", self.tag)))
     }
 
+    fn required_context(&mut self) -> Result<String, BindingError> {
+        self.context
+            .take()
+            .ok_or_else(|| BindingError::conversion(format!("{} requires context", self.tag)))
+    }
+
     fn required_bytes(&mut self) -> Result<Vec<u8>, BindingError> {
         self.bytes_value
             .take()
@@ -391,6 +413,13 @@ fn k_into_native_with_depth(value: K, depth: usize) -> Result<NativeValue, Bindi
     }
     let mut native = empty_native_value();
     match value {
+        K::Operator(value) => set_string(&mut native, "operator", value.name().to_owned()),
+        K::Lambda(value) => {
+            let (source, context) = value.into_parts();
+            native.tag = "lambda".into();
+            native.string_value = Some(source);
+            native.context = Some(context);
+        }
         K::Null => native.tag = "null".into(),
         K::Boolean(value) => {
             native.tag = "boolean".into();
@@ -503,6 +532,7 @@ fn empty_native_value() -> NativeValue {
         bigint_value: None,
         string_value: None,
         bytes_value: None,
+        context: None,
         items: None,
         entries: None,
     }
@@ -530,7 +560,7 @@ fn set_string(native: &mut NativeValue, tag: &str, value: String) {
 mod tests {
     use chrono::{DateTime, Duration, NaiveDate, NaiveTime};
     use indexmap::IndexMap;
-    use kola::types::{K, MIN_Q_TIMESTAMP_UNIX_NANOS};
+    use kola::types::{QLambda, QOperator, K, MIN_Q_TIMESTAMP_UNIX_NANOS};
     use napi::bindgen_prelude::{BigInt, Buffer};
     use std::mem::size_of;
 
@@ -618,6 +648,64 @@ mod tests {
             .into_k()
             .expect("decode bytes");
         assert_eq!(decoded, K::CharVector(bytes));
+    }
+
+    #[test]
+    fn round_trips_operator_and_lambda_contracts() {
+        let operator = k_into_native(K::Operator(QOperator::PLUS)).expect("encode operator");
+        assert_eq!(operator.tag, "operator");
+        assert_eq!(operator.string_value.as_deref(), Some("+"));
+        assert_eq!(
+            OwnedNativeValue::try_from(operator)
+                .expect("snapshot operator")
+                .into_k()
+                .expect("decode operator"),
+            K::Operator(QOperator::PLUS)
+        );
+
+        let lambda = QLambda::with_context(" {x+y} ", "ctx").expect("lambda");
+        let native = k_into_native(K::Lambda(lambda.clone())).expect("encode lambda");
+        assert_eq!(native.tag, "lambda");
+        assert_eq!(native.string_value.as_deref(), Some(" {x+y} "));
+        assert_eq!(native.context.as_deref(), Some("ctx"));
+        assert_eq!(
+            OwnedNativeValue::try_from(native)
+                .expect("snapshot lambda")
+                .into_k()
+                .expect("decode lambda"),
+            K::Lambda(lambda)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_operator_and_lambda_contracts() {
+        let mut operator = empty_native_value();
+        operator.tag = "operator".into();
+        operator.string_value = Some("plus".into());
+        let operator_error = OwnedNativeValue::try_from(operator)
+            .expect("snapshot operator")
+            .into_k()
+            .expect_err("unknown operator must fail");
+        assert_eq!(operator_error.code, "KOLA_CONVERSION");
+
+        let mut missing_context = empty_native_value();
+        missing_context.tag = "lambda".into();
+        missing_context.string_value = Some("{x+y}".into());
+        let context_error = OwnedNativeValue::try_from(missing_context)
+            .expect("snapshot lambda")
+            .into_k()
+            .expect_err("missing explicit context must fail");
+        assert_eq!(context_error.code, "KOLA_CONVERSION");
+
+        let mut nul_source = empty_native_value();
+        nul_source.tag = "lambda".into();
+        nul_source.string_value = Some("{x\0+y}".into());
+        nul_source.context = Some(String::new());
+        let source_error = OwnedNativeValue::try_from(nul_source)
+            .expect("snapshot lambda")
+            .into_k()
+            .expect_err("NUL lambda source must fail");
+        assert_eq!(source_error.code, "KOLA_CONVERSION");
     }
 
     #[test]

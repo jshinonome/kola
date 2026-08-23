@@ -30,7 +30,7 @@
     "node": "v26.3.0",
     "platform": "win32",
     "architecture": "x64",
-    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor          ",
+    "cpu": "x86_64 workstation (model withheld for privacy)",
     "exposeGc": true
   },
   "method": {

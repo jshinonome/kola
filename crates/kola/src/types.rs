@@ -20,6 +20,148 @@ pub enum MsgType {
     Response = 2,
 }
 
+pub(crate) const Q_UNARY_PRIMITIVES: [&str; 42] = [
+    "", "+:", "-:", "*:", "%:", "&:", "|:", "^:", "=:", "<:", ">:", "$:", ",:", "#:", "_:", "~:",
+    "!:", "?:", "@:", ".:", "0::", "1::", "2::", "avg", "last", "sum", "prd", "min", "max", "exit",
+    "getenv", "abs", "sqrt", "log", "exp", "sin", "asin", "cos", "acos", "tan", "atan", "enlist",
+];
+pub(crate) const Q_BINARY_PRIMITIVES: [&str; 34] = [
+    ":", "+", "-", "*", "%", "&", "|", "^", "=", "<", ">", "$", ",", "#", "_", "~", "!", "?", "@",
+    ".", "0:", "1:", "2:", "in", "within", "like", "bin", "ss", "insert", "wsum", "wavg", "div",
+    "xexp", "setenv",
+];
+pub(crate) const Q_TERNARY_PRIMITIVES: [&str; 3] = ["'", "/", "\\"];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QOperator {
+    name: &'static str,
+    k_type: u8,
+    opcode: u8,
+}
+
+impl QOperator {
+    pub const PLUS: Self = Self {
+        name: "+",
+        k_type: 102,
+        opcode: 1,
+    };
+
+    pub fn new(name: &str) -> Result<Self, KolaError> {
+        if name.as_bytes().contains(&0) {
+            return Err(KolaError::NotAbleToSerializeErr(
+                "q primitive operator names cannot contain NUL bytes".to_string(),
+            ));
+        }
+        for (k_type, primitives) in [
+            (101, Q_UNARY_PRIMITIVES.as_slice()),
+            (102, Q_BINARY_PRIMITIVES.as_slice()),
+            (103, Q_TERNARY_PRIMITIVES.as_slice()),
+        ] {
+            if let Some(opcode) = primitives.iter().position(|primitive| *primitive == name) {
+                if !name.is_empty() {
+                    return Ok(Self {
+                        name: primitives[opcode],
+                        k_type,
+                        opcode: opcode as u8,
+                    });
+                }
+            }
+        }
+        Err(KolaError::NotAbleToSerializeErr(format!(
+            "unsupported q primitive operator name {name:?}"
+        )))
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub(crate) fn from_wire(k_type: u8, opcode: u8) -> Option<Self> {
+        let primitives = match k_type {
+            101 => Q_UNARY_PRIMITIVES.as_slice(),
+            102 => Q_BINARY_PRIMITIVES.as_slice(),
+            103 => Q_TERNARY_PRIMITIVES.as_slice(),
+            _ => return None,
+        };
+        let name = *primitives.get(opcode as usize)?;
+        if name.is_empty() {
+            return None;
+        }
+        Some(Self {
+            name,
+            k_type,
+            opcode,
+        })
+    }
+
+    pub(crate) fn wire_value(&self) -> (u8, u8) {
+        (self.k_type, self.opcode)
+    }
+}
+
+impl TryFrom<&str> for QOperator {
+    type Error = KolaError;
+
+    fn try_from(name: &str) -> Result<Self, Self::Error> {
+        Self::new(name)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QLambda {
+    source: String,
+    context: String,
+}
+
+impl QLambda {
+    pub fn new(source: impl Into<String>) -> Result<Self, KolaError> {
+        Self::with_context(source, "")
+    }
+
+    pub fn with_context(
+        source: impl Into<String>,
+        context: impl Into<String>,
+    ) -> Result<Self, KolaError> {
+        let source = source.into();
+        let context = context.into();
+        if source.as_bytes().contains(&0) {
+            return Err(KolaError::NotAbleToSerializeErr(
+                "q lambda source cannot contain NUL bytes".to_string(),
+            ));
+        }
+        if context.as_bytes().contains(&0) {
+            return Err(KolaError::NotAbleToSerializeErr(
+                "q lambda context cannot contain NUL bytes".to_string(),
+            ));
+        }
+        if !context.is_empty() && context.starts_with('.') {
+            return Err(KolaError::NotAbleToSerializeErr(
+                "q lambda context omits the leading dot".to_string(),
+            ));
+        }
+        let trimmed = source.trim();
+        let lambda_source = trimmed.strip_prefix("k)").unwrap_or(trimmed);
+        if !lambda_source.starts_with('{') || !lambda_source.ends_with('}') {
+            return Err(KolaError::NotAbleToSerializeErr(
+                "q lambda source must be brace-delimited".to_string(),
+            ));
+        }
+        Ok(Self { source, context })
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn context(&self) -> &str {
+        &self.context
+    }
+
+    pub fn into_parts(self) -> (String, String) {
+        (self.source, self.context)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum K {
     Boolean(bool),
@@ -42,6 +184,8 @@ pub enum K {
     Series(Series),            // list, dictionaries
     DataFrame(DataFrame),      // table and keyed table
     Dict(IndexMap<String, K>), // dict, symbols -> atom or list
+    Operator(QOperator),
+    Lambda(QLambda),
     Null,
 }
 
@@ -105,6 +249,13 @@ impl K {
                 }
                 Ok(length)
             }
+            K::Operator(_) => Ok(2),
+            K::Lambda(lambda) => lambda
+                .source()
+                .len()
+                .checked_add(lambda.context().len())
+                .and_then(|length| length.checked_add(8))
+                .ok_or(KolaError::OverLengthErr()),
             K::Null => Ok(2),
             K::Dict(dict) => {
                 let mut length = 13usize;
@@ -202,6 +353,8 @@ impl K {
             K::MixedList(_) => 90,
             K::Dict(_) => 91,
             K::DataFrame(_) => 92,
+            K::Operator(operator) => operator.k_type as i16,
+            K::Lambda(_) => 100,
             K::Null => 0,
             _ => 100,
         }

@@ -9,6 +9,8 @@ describe("public facade surface", () => {
       "KolaDate",
       "KolaError",
       "KolaIOError",
+      "KolaQLambda",
+      "KolaQOperator",
       "KolaTime",
       "KolaTimespan",
       "KolaTimestamp",

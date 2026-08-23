@@ -8,12 +8,22 @@ import {
   normalizeOutput,
 } from "../src/conversion.js";
 import { KolaError } from "../src/errors.js";
+import type { NativeValue } from "../src/native-contract.js";
 import {
   KolaDate,
+  KolaQLambda,
+  KolaQOperator,
   KolaTime,
   KolaTimespan,
   KolaTimestamp,
 } from "../src/types.js";
+
+// @ts-expect-error Private fields keep KolaQOperator nominal.
+const structurallyForgedOperator: KolaQOperator = { name: "+" };
+void structurallyForgedOperator;
+// @ts-expect-error Private fields keep KolaQLambda nominal.
+const structurallyForgedLambda: KolaQLambda = { source: "{x}", context: "" };
+void structurallyForgedLambda;
 
 describe("public value conversion", () => {
   it("normalizes scalar, list, dictionary, bigint, and arbitrary byte inputs", () => {
@@ -56,6 +66,102 @@ describe("public value conversion", () => {
 
     for (const value of values) {
       expect(normalizeOutput(normalizeInput(value))).toEqual(value);
+    }
+  });
+
+  it("round-trips q operator and lambda wrapper contracts", () => {
+    expect(KolaQOperator.PLUS.name).toBe("+");
+    for (const name of ["+:", "setenv", "'", "/", "\\"]) {
+      expect(new KolaQOperator(name).name).toBe(name);
+    }
+    expect(normalizeInput(KolaQOperator.PLUS)).toEqual({
+      tag: "operator",
+      stringValue: "+",
+    });
+
+    const root = new KolaQLambda("{x+y}");
+    const contextual = new KolaQLambda(" {x+y} ", "ctx");
+    const kDialect = new KolaQLambda(" k){x+y} ");
+    expect(normalizeInput(root)).toEqual({
+      tag: "lambda",
+      stringValue: "{x+y}",
+      context: "",
+    });
+    expect(normalizeInput(contextual)).toEqual({
+      tag: "lambda",
+      stringValue: " {x+y} ",
+      context: "ctx",
+    });
+    expect(normalizeInput(kDialect)).toEqual({
+      tag: "lambda",
+      stringValue: " k){x+y} ",
+      context: "",
+    });
+    expect(normalizeOutput({ tag: "operator", stringValue: "+" })).toEqual(
+      KolaQOperator.PLUS,
+    );
+    expect(
+      normalizeOutput({
+        tag: "lambda",
+        stringValue: " {x+y} ",
+        context: "ctx",
+      }),
+    ).toEqual(contextual);
+  });
+
+  it("rejects invalid constructors and malformed native function envelopes", () => {
+    for (const construct of [
+      () => new KolaQOperator("plus"),
+      () => new KolaQOperator("+\0"),
+      () => new KolaQOperator(1 as never),
+      () => new KolaQLambda("x+y"),
+      () => new KolaQLambda("k)x+y"),
+      () => new KolaQLambda("{x\0+y}"),
+      () => new KolaQLambda("{x+y}", "bad\0context"),
+      () => new KolaQLambda("{x+y}", ".ctx"),
+      () => new KolaQLambda(1 as never),
+      () => new KolaQLambda("{x+y}", 1 as never),
+    ]) {
+      expect(construct).toThrowError(expect.objectContaining({ code: "KOLA_CONVERSION" }));
+    }
+
+    const invalidEnvelopes: NativeValue[] = [
+      { tag: "operator", stringValue: "plus" },
+      { tag: "lambda", stringValue: "x+y", context: "" },
+      { tag: "lambda", stringValue: "{x+y}", context: "bad\0context" },
+      { tag: "lambda", stringValue: "{x+y}", context: ".ctx" },
+      { tag: "lambda", stringValue: "{x+y}" },
+    ];
+    for (const envelope of invalidEnvelopes) {
+      expect(() => normalizeOutput(envelope)).toThrowError(
+        expect.objectContaining({ code: "KOLA_CONVERSION" }),
+      );
+    }
+  });
+
+  it("freezes callable values and defensively rejects forged instances", () => {
+    expect(KolaQOperator.PLUS).toBe(KolaQOperator.PLUS);
+    expect(Object.isFrozen(KolaQOperator.PLUS)).toBe(true);
+    const lambda = new KolaQLambda("{x+y}");
+    expect(Object.isFrozen(lambda)).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(KolaQOperator, "PLUS")).toMatchObject({
+      get: expect.any(Function),
+      set: undefined,
+    });
+    expect(Reflect.set(KolaQOperator, "PLUS", new KolaQOperator("-"))).toBe(false);
+    expect(() =>
+      Object.defineProperty(KolaQOperator.PLUS, "name", { value: "-" }),
+    ).toThrow(TypeError);
+    expect(() =>
+      Object.defineProperty(lambda, "context", { value: "ctx" }),
+    ).toThrow(TypeError);
+
+    const forgedOperator = Object.create(KolaQOperator.prototype) as KolaQOperator;
+    const forgedLambda = Object.create(KolaQLambda.prototype) as KolaQLambda;
+    for (const value of [forgedOperator, forgedLambda]) {
+      expect(() => normalizeInput(value)).toThrowError(
+        expect.objectContaining({ code: "KOLA_CONVERSION" }),
+      );
     }
   });
 

@@ -18,6 +18,7 @@ export interface NativeValue {
   readonly numberValue?: number;
   readonly bigintValue?: bigint;
   readonly stringValue?: string;
+  readonly context?: string;
   readonly bytesValue?: Uint8Array;
   readonly items?: NativeValue[];
   readonly entries?: NativeEntry[];

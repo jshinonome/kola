@@ -7,9 +7,65 @@ import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
-from kola import KolaError, KolaIOError, Q
+from kola import (
+    KolaError,
+    KolaIOError,
+    KolaQLambda,
+    KolaQOperator,
+    Q,
+    serialize_as_ipc_bytes6,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def test_q_function_value_exports_validation_and_exact_frames():
+    plus = KolaQOperator.PLUS
+    assert plus.name == "+"
+    assert KolaQOperator("+").name == "+"
+    assert KolaQOperator("+") == plus
+    assert KolaQOperator.__module__ == "kola"
+    assert repr(plus) == 'KolaQOperator("+")'
+    with pytest.raises(AttributeError):
+        plus.name = "-"
+
+    root = KolaQLambda("{x+y}")
+    contextual = KolaQLambda(" {x+y} ", "ctx")
+    k_dialect = KolaQLambda(" k){x+y} ")
+    assert (root.source, root.context) == ("{x+y}", "")
+    assert (contextual.source, contextual.context) == (" {x+y} ", "ctx")
+    assert (k_dialect.source, k_dialect.context) == (" k){x+y} ", "")
+    assert root == KolaQLambda("{x+y}")
+    assert KolaQLambda.__module__ == "kola"
+    assert repr(root) == 'KolaQLambda("{x+y}")'
+    assert repr(contextual) == 'KolaQLambda(" {x+y} ", "ctx")'
+    with pytest.raises(AttributeError):
+        root.source = "{x-y}"
+    with pytest.raises(AttributeError):
+        root.context = "ctx"
+
+    with pytest.raises(KolaError, match="unsupported q primitive"):
+        KolaQOperator("plus")
+    with pytest.raises(KolaError, match="NUL"):
+        KolaQOperator("+\0")
+    with pytest.raises(KolaError, match="brace-delimited"):
+        KolaQLambda("x+y")
+    with pytest.raises(KolaError, match="NUL"):
+        KolaQLambda("{x\0+y}")
+    with pytest.raises(KolaError, match="NUL"):
+        KolaQLambda("{x+y}", "bad\0context")
+    with pytest.raises(KolaError, match="q lambda context omits the leading dot"):
+        KolaQLambda("{x+y}", ".ctx")
+
+    assert serialize_as_ipc_bytes6("sync", False, plus) == bytes(
+        [1, 1, 0, 0, 10, 0, 0, 0, 102, 1]
+    )
+    assert serialize_as_ipc_bytes6("sync", False, root) == bytes(
+        [1, 1, 0, 0, 21, 0, 0, 0, 100, 0, 10, 0, 5, 0, 0, 0]
+    ) + b"{x+y}"
+    assert serialize_as_ipc_bytes6("sync", False, contextual) == bytes(
+        [1, 1, 0, 0, 26, 0, 0, 0, 100]
+    ) + b"ctx\0" + bytes([10, 0, 7, 0, 0, 0]) + b" {x+y} "
 
 
 @pytest.mark.parametrize(
@@ -119,6 +175,23 @@ def test_round_trip_arbitrary_char_vector_bytes(q):
     actual = q.sync("{x}", value)
     assert isinstance(actual, bytes)
     assert actual == value
+
+
+def test_round_trip_q_operator_and_lambda_values(q):
+    expression = "{[op;a;b] .[op;(a;b)]}"
+    assert q.sync(expression, KolaQOperator.PLUS, 1, 2) == 3
+    assert q.sync(expression, KolaQLambda("{x+y}"), 1, 2) == 3
+
+    operator = q.sync("+")
+    assert isinstance(operator, KolaQOperator)
+    assert operator.name == "+"
+    assert q.sync(expression, operator, 1, 2) == 3
+
+    q_lambda = q.sync("{x+y}")
+    assert isinstance(q_lambda, KolaQLambda)
+    assert q_lambda.source == "{x+y}"
+    assert q_lambda.context == ""
+    assert q.sync(expression, q_lambda, 1, 2) == 3
 
 
 @pytest.mark.parametrize(
