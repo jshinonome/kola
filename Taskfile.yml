@@ -15,16 +15,21 @@ tasks:
   venv:
     cmds:
       - uv venv --python 3.12
-      - uv pip install pip
-      - uv pip install -r py-kola/requirements.txt
+      - uv pip install --group py-kola/pyproject.toml:dev --group py-kola/pyproject.toml:benchmark
 
   test:
     cmds:
       - cargo test
 
   build-python:
+    dir: py-kola
     cmds:
-      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 maturin develop --manifest-path py-kola/Cargo.toml
+      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 maturin develop
+
+  build-python-release:
+    dir: py-kola
+    cmds:
+      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 maturin develop --release
 
   install-python:
     deps:
@@ -119,7 +124,7 @@ tasks:
       - defer:
           task: kdb-stop
       - KOLA_Q_ROWS=${KOLA_Q_ROWS:-100000} task kdb-start
-      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 task build-python
+      - env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64 task build-python-release
       - >-
         cd py-kola &&
         env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64
@@ -127,7 +132,20 @@ tasks:
         KOLA_TEST_Q_PORT=1801
         python benchmarks/bench_ipc.py
         --warmups ${KOLA_BENCH_WARMUPS:-2}
-        --iterations ${KOLA_BENCH_ITERATIONS:-5}
+        --iterations ${KOLA_BENCH_ITERATIONS:-100}
+
+  benchmark-compare-podman:
+    cmds:
+      - defer:
+          task: kdb-stop
+      - KOLA_Q_ROWS=${KOLA_Q_ROWS:-100000} task kdb-start
+      - >-
+        env -u KX_BEARER_TOKEN -u KDB_LICENSE_B64
+        KOLA_TEST_Q_HOST=127.0.0.1
+        KOLA_TEST_Q_PORT=1801
+        uv run --no-project --python 3.12 python py-kola/benchmarks/compare_upstream.py
+        --warmups ${KOLA_BENCH_WARMUPS:-2}
+        --iterations ${KOLA_BENCH_ITERATIONS:-100}
 
   build-node-release:
     dir: js-kola

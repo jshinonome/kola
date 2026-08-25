@@ -22,6 +22,17 @@ keywords = ["q", "kdb", "polars", "dataframe", "arrow"]
 dynamic = ["version"]
 dependencies = ['polars >= 1.31.0', 'pyarrow >= 20.0.0']
 
+[dependency-groups]
+dev = [
+  "maturin>=1.7.4",
+  "pytest>=8.4",
+  "patchelf; sys_platform == 'linux'",
+]
+# Exact pins so benchmark runs stay comparable across machines and subjects.
+benchmark = [
+  "polars==1.44.0",
+]
+
 [tool.maturin]
 include = ["rust-toolchain.toml"]
 

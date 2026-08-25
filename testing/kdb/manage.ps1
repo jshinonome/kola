@@ -2,7 +2,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet("build", "start", "stop", "test", "benchmark", "test-node", "benchmark-node")]
+    [ValidateSet("build", "start", "stop", "test", "benchmark", "compare", "test-node", "benchmark-node")]
     [string] $Action = "start",
     [ValidateRange(1, 2000000)]
     [int] $Rows = 10000,
@@ -10,14 +10,20 @@ param(
     [int] $Warmups = 2,
     [ValidateRange(1, 1000)]
     [int] $Iterations = 5,
-    [string] $Output
+    [string] $Output,
+    # Opt-in: run the q container with host networking. Unlike the default loopback-only
+    # port publish, this binds the unauthenticated q listener on the podman machine's
+    # interfaces (machine-local peers can reach it; with WSL mirrored networking it may be
+    # reachable from the LAN). Only for machines whose netavark cannot program port rules.
+    [switch] $HostNetwork
 )
 
-if (($Action -eq "benchmark" -or $Action -eq "benchmark-node") -and -not $PSBoundParameters.ContainsKey("Rows")) {
+$benchmarkActions = @("benchmark", "compare", "benchmark-node")
+if ($benchmarkActions -contains $Action -and -not $PSBoundParameters.ContainsKey("Rows")) {
     $Rows = 100000
 }
 
-if ($Action -eq "benchmark-node" -and -not $PSBoundParameters.ContainsKey("Iterations")) {
+if ($benchmarkActions -contains $Action -and -not $PSBoundParameters.ContainsKey("Iterations")) {
     $Iterations = 100
 }
 
@@ -202,6 +208,25 @@ function Stop-KdbContainer {
     }
 }
 
+function Start-KdbContainerOnce {
+    param([Parameter(Mandatory)] [bool] $UseHostNetwork)
+
+    $networkArguments = if ($UseHostNetwork) {
+        @("--network", "host")
+    } else {
+        @("--publish", "127.0.0.1:1801:1801/tcp")
+    }
+    Invoke-Podman run --detach `
+        --name $container `
+        @networkArguments `
+        --cpus 4 `
+        --memory 4g `
+        --tmpfs "/run/kdb-license:rw,nosuid,nodev,noexec,size=1m" `
+        --env "KOLA_Q_ROWS=$Rows" `
+        --secret "kola-kdb-license,target=kdb-license-b64,type=mount" `
+        $image
+}
+
 function Start-KdbContainer {
     Import-KdbEnvironment "KDB_LICENSE_B64"
     Assert-KdbEnvironment "KDB_LICENSE_B64"
@@ -214,15 +239,20 @@ function Start-KdbContainer {
     Stop-KdbContainer
     Invoke-Podman secret create --replace --env=true kola-kdb-license KDB_LICENSE_B64
     try {
-        Invoke-Podman run --detach `
-            --name $container `
-            --publish 127.0.0.1:1801:1801/tcp `
-            --cpus 4 `
-            --memory 4g `
-            --tmpfs "/run/kdb-license:rw,nosuid,nodev,noexec,size=1m" `
-            --env "KOLA_Q_ROWS=$Rows" `
-            --secret "kola-kdb-license,target=kdb-license-b64,type=mount" `
-            $image
+        if ($HostNetwork) {
+            Write-Warning "Host networking requested: the unauthenticated q listener is not loopback-restricted."
+            Start-KdbContainerOnce -UseHostNetwork $true
+        } else {
+            try {
+                Start-KdbContainerOnce -UseHostNetwork $false
+            }
+            catch {
+                Invoke-Podman rm --force --ignore $container
+                throw ("Loopback port publish failed ($($_.Exception.Message)). " +
+                    "If this machine's netavark cannot program port rules, rerun with " +
+                    "-HostNetwork to accept a non-loopback-restricted q listener.")
+            }
+        }
 
         foreach ($attempt in 1..30) {
             $null = & podman healthcheck run $container 2>$null
@@ -258,16 +288,21 @@ function Initialize-PythonEnvironment {
         }
     }
 
-    & uv pip install --python $python -r (Join-Path $repoRoot "py-kola/requirements.txt")
+    $pyprojectPath = Join-Path $repoRoot "py-kola/pyproject.toml"
+    & uv pip install --python $python `
+        --group "${pyprojectPath}:dev" `
+        --group "${pyprojectPath}:benchmark"
     if ($LASTEXITCODE -ne 0) {
         throw "uv pip install failed with exit code $LASTEXITCODE"
     }
 
     [Environment]::SetEnvironmentVariable("VIRTUAL_ENV", $venv, "Process")
     $maturin = Join-Path $venv "Scripts/maturin.exe"
-    Push-Location $repoRoot
+    # maturin resolves dependency-group names against its working directory,
+    # so it must run from the package directory.
+    Push-Location (Join-Path $repoRoot "py-kola")
     try {
-        & $maturin develop --manifest-path py-kola/Cargo.toml
+        & $maturin develop --release
         if ($LASTEXITCODE -ne 0) {
             throw "maturin develop failed with exit code $LASTEXITCODE"
         }
@@ -317,6 +352,39 @@ function Benchmark-KdbContainer {
             & $python @arguments
             if ($LASTEXITCODE -ne 0) {
                 throw "benchmark failed with exit code $LASTEXITCODE"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    finally {
+        Stop-KdbContainer
+    }
+}
+
+function Compare-KdbContainer {
+    Start-KdbContainer
+    try {
+        [Environment]::SetEnvironmentVariable("KX_BEARER_TOKEN", $null, "Process")
+        [Environment]::SetEnvironmentVariable("KDB_LICENSE_B64", $null, "Process")
+        [Environment]::SetEnvironmentVariable("KOLA_TEST_Q_HOST", "127.0.0.1", "Process")
+        [Environment]::SetEnvironmentVariable("KOLA_TEST_Q_PORT", "1801", "Process")
+        $arguments = @(
+            "run", "--no-project", "--python", "3.12", "python",
+            "py-kola/benchmarks/compare_upstream.py",
+            "--warmups", "$Warmups",
+            "--iterations", "$Iterations"
+        )
+        if ($Output) {
+            $outputPath = [IO.Path]::GetFullPath($Output, (Get-Location).Path)
+            $arguments += "--output", $outputPath
+        }
+        Push-Location $repoRoot
+        try {
+            & uv @arguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "upstream comparison failed with exit code $LASTEXITCODE"
             }
         }
         finally {
@@ -424,6 +492,7 @@ try {
         "stop" { Stop-KdbContainer }
         "test" { Test-KdbContainer }
         "benchmark" { Benchmark-KdbContainer }
+        "compare" { Compare-KdbContainer }
         "test-node" { Test-NodeKdbContainer }
         "benchmark-node" { Benchmark-NodeKdbContainer }
     }

@@ -1,0 +1,55 @@
+[workspace]
+name = "kola"
+description = "q IPC interface for Polars DataFrames in Python and Node.js"
+# Conda packages below resolve from conda-forge only (see `channels`).
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "win-64"]
+requires-pixi = ">=0.71"
+
+[dependencies]
+# Provisions the cargo toolchain for the core crate and both bindings.
+rust = ">=1.88"
+# abi3-py310 wheels: 3.12 is the default dev interpreter, not a support floor.
+python = ">=3.10,<3.14"
+uv = ">=0.7"
+pip = "*"
+
+[activation.env]
+CARGO_TERM_COLOR = "always"
+RUST_BACKTRACE = "1"
+
+# ── Tasks ─────────────────────────────────────────────────────────────────────
+
+[tasks]
+test-rs = "cargo test"
+lint-rs = "cargo clippy --workspace --all-targets -- -D warnings"
+fmt-rs = "cargo fmt --all"
+fmt-check-rs = "cargo fmt --all -- --check"
+# Python dev flow: create the uv venv, install pyproject dependency groups,
+# then build the extension into it with maturin (release profile so local
+# measurements match shipped wheels).
+venv = "uv venv --python 3.12 .venv"
+build-python = { cmd = "uv run --no-project --python ../.venv maturin develop --release", cwd = "py-kola" }
+test-python = "uv run --no-project --python .venv pytest -q py-kola/test"
+benchmark-python = "uv run --no-project --python .venv python py-kola/benchmarks/bench_ipc.py"
+# Compares the local wheel against the published upstream release in two
+# isolated uv environments; requires a running fixture q server.
+compare-upstream = "uv run --no-project --python .venv python py-kola/benchmarks/compare_upstream.py"
+
+# ── Features ──────────────────────────────────────────────────────────────────
+
+[feature.js.dependencies]
+nodejs = ">=22"
+
+[feature.js.tasks]
+js-install = { cmd = "npm install --no-audit --no-fund", cwd = "js-kola" }
+js-build = { cmd = "npm run build:release", cwd = "js-kola" }
+js-test = { cmd = "npm test", cwd = "js-kola" }
+js-test-live = { cmd = "npm run test:live", cwd = "js-kola" }
+js-benchmark = { cmd = "npm run benchmark", cwd = "js-kola" }
+
+# ── Environments ──────────────────────────────────────────────────────────────
+
+[environments]
+default = { solve-group = "main" }
+js = { features = ["js"], solve-group = "main" }

@@ -96,10 +96,9 @@ jobs:
           version: latest-known
           enable-cache: true
           cache-dependency-glob: |
-            py-kola/requirements.txt
             py-kola/pyproject.toml
             Cargo.lock
       - name: Install Python dependencies
-        run: uv pip install --system -r py-kola/requirements.txt -e py-kola
+        run: uv pip install --system --group py-kola/pyproject.toml:dev --group py-kola/pyproject.toml:benchmark -e py-kola
       - name: Run Python tests
         run: python -m pytest -q py-kola/test

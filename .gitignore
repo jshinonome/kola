@@ -17,3 +17,7 @@ kc.lic
 k4.lic
 testing/kdb/.env
 testing/kdb/.env.*
+.pixi
+pixi.lock
+py-kola/benchmarks/.compare
+bench-*.json

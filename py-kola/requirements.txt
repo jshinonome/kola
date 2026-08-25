@@ -1,5 +1,0 @@
-polars
-pyarrow
-maturin
-pytest
-patchelf; sys_platform == "linux"
