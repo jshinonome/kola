@@ -1324,9 +1324,11 @@ dependencies = [
 name = "kola"
 version = "2.5.1"
 dependencies = [
+ "bytemuck",
  "chrono",
  "indexmap",
  "lz4_flex",
+ "memchr",
  "polars",
  "polars-arrow",
  "polars-buffer",

@@ -5,7 +5,9 @@ use polars::prelude::{DataFrame, IpcStreamReader, IpcStreamWriter, SerReader, Se
 use crate::error::BindingError;
 
 pub(crate) fn dataframe_to_ipc(mut dataframe: DataFrame) -> Result<Vec<u8>, BindingError> {
-    let mut bytes = Vec::new();
+    // Arrow IPC stream size tracks the in-memory footprint closely; reserving it upfront
+    // avoids repeated growth copies for large tables.
+    let mut bytes = Vec::with_capacity(dataframe.estimated_size() + 1024);
     IpcStreamWriter::new(&mut bytes)
         .finish(&mut dataframe)
         .map_err(|error| {

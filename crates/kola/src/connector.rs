@@ -1,5 +1,5 @@
 use crate::errors::KolaError;
-use crate::serde6::{compress, decompress, deserialize, serialize};
+use crate::serde6::{compress, decompress, deserialize, serialize_into};
 use crate::types::{MsgType, K};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, StreamOwned};
@@ -12,6 +12,16 @@ use std::time::{Duration, Instant};
 pub(crate) trait QStream: IoRead + IoWrite {}
 
 impl<S: IoRead + IoWrite> QStream for S {}
+
+/// Sized `Read` adapter over the boxed stream so `Read` combinators requiring `Self: Sized`
+/// (e.g. `take`) apply to it.
+struct StreamReader<'a>(&'a mut (dyn QStream + Send + Sync));
+
+impl IoRead for StreamReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buffer)
+    }
+}
 
 #[derive(Debug)]
 struct SharedTcpStream(Arc<TcpStream>);
@@ -345,74 +355,37 @@ impl Connector {
                     let argument_count =
                         i32::try_from(args.len() + 1).map_err(|_| KolaError::OverLengthErr())?;
 
-                    let mut vectors = Vec::new();
-                    vectors.try_reserve_exact(args.len()).map_err(|error| {
-                        KolaError::Err(format!(
-                            "Unable to allocate serialized argument list: {error}"
-                        ))
-                    })?;
-                    for k in args {
-                        vectors.push(serialize(k)?);
+                    let mut vec = allocate_buffer(total_length, "IPC request")?;
+                    vec.extend_from_slice(&[1, msg_type as u8, 0, 0]);
+                    vec.extend_from_slice(&header_length.to_le_bytes());
+                    vec.extend_from_slice(&[0, 0]);
+                    vec.extend_from_slice(&argument_count.to_le_bytes());
+                    if is_lambda {
+                        vec.extend_from_slice(&[100, 0]);
                     }
-                    let serialized_arguments_length =
-                        vectors.iter().try_fold(0usize, |length, value| {
-                            length.checked_add(value.len()).ok_or_else(|| {
-                                KolaError::Err("Serialized argument length overflowed".to_string())
-                            })
-                        })?;
-                    let prefix_length = IPC_HEADER_LENGTH
-                        .checked_add(body_prefix_length)
-                        .ok_or_else(|| {
-                            KolaError::Err("IPC request length overflowed".to_string())
-                        })?;
-                    let actual_total_length = prefix_length
-                        .checked_add(serialized_arguments_length)
-                        .ok_or_else(|| {
-                            KolaError::Err("IPC request length overflowed".to_string())
-                        })?;
-                    if actual_total_length != total_length {
+                    vec.extend_from_slice(&[10, 0]);
+                    vec.extend_from_slice(&expression_length.to_le_bytes());
+                    vec.extend_from_slice(expr.as_bytes());
+                    for k in args {
+                        serialize_into(k, &mut vec)?;
+                    }
+                    if vec.len() != total_length {
                         return Err(KolaError::Err(
                             "Serialized argument length differs from its declared q length"
                                 .to_string(),
                         ));
                     }
-
-                    let mut vec = allocate_buffer(prefix_length, "IPC request prefix")?;
-                    vec.write_all(&[1, msg_type as u8, 0, 0])?;
-                    vec.write_all(&header_length.to_le_bytes())?;
-                    vec.write_all(&[0, 0])?;
-                    vec.write_all(&argument_count.to_le_bytes())?;
-                    if is_lambda {
-                        vec.write_all(&[100, 0])?;
-                    }
-                    vec.write_all(&[10, 0])?;
-                    vec.write_all(&expression_length.to_le_bytes())?;
-                    vec.write_all(expr.as_bytes())?;
-                    if self.is_local || total_length < 10_000_000 {
-                        match stream.write_all(&vec) {
-                            Ok(_) => (),
-                            Err(e) => {
-                                self.shutdown()?;
-                                return Err(KolaError::IOError(e));
-                            }
-                        };
-                        for vector in vectors {
-                            match stream.write_all(&vector) {
-                                Ok(_) => (),
-                                Err(e) => {
-                                    self.shutdown()?;
-                                    return Err(KolaError::IOError(e));
-                                }
-                            }
-                        }
+                    let payload = if self.is_local || total_length < 10_000_000 {
+                        vec
                     } else {
-                        let mut original_vec =
-                            allocate_buffer(total_length, "compressible IPC request")?;
-                        original_vec.write_all(&vec)?;
-                        for vector in vectors {
-                            original_vec.write_all(&vector)?;
+                        compress(vec)
+                    };
+                    match stream.write_all(&payload) {
+                        Ok(_) => (),
+                        Err(e) => {
+                            self.shutdown()?;
+                            return Err(KolaError::IOError(e));
                         }
-                        stream.write_all(&compress(original_vec))?
                     };
                     Ok(())
                 }
@@ -473,15 +446,27 @@ impl Connector {
                         return Err(error);
                     }
                 };
-                let mut vec = match allocate_zeroed_buffer(body_length, "IPC message body") {
+                let mut vec = match allocate_buffer(body_length, "IPC message body") {
                     Ok(vec) => vec,
                     Err(error) => {
                         self.shutdown()?;
                         return Err(error);
                     }
                 };
-                match stream.read_exact(&mut vec) {
-                    Ok(_) => (),
+                // `read_to_end` with a `take` limit fills the reserved spare capacity directly,
+                // skipping the redundant zero-fill a `read_exact` destination would require.
+                match StreamReader(stream.as_mut())
+                    .take(body_length as u64)
+                    .read_to_end(&mut vec)
+                {
+                    Ok(read_length) if read_length == body_length => (),
+                    Ok(_) => {
+                        self.shutdown()?;
+                        return Err(KolaError::IOError(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "IPC message body ended before its declared length",
+                        )));
+                    }
                     Err(e) => {
                         self.shutdown()?;
                         return Err(KolaError::IOError(e));
@@ -622,6 +607,7 @@ impl Drop for Connector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::serde6::serialize;
     use std::io::{Cursor, Read, Write};
     use std::net::TcpListener;
     use std::thread;

@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Cursor;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Read};
 use std::str;
 
 use lz4_flex::frame::FrameDecoder;
@@ -330,21 +330,20 @@ pub fn generate_j6_ipc_msg(
 ) -> Result<Vec<u8>, KolaError> {
     let body_length = k.j6_len()?;
     let (total_length, header_length) = checked_j6_ipc_total_length(body_length)?;
-    let serialized = serde6::serialize(&k)?;
-    if serialized.len() != body_length {
-        return Err(KolaError::Err(
-            "Serialized q value length differs from its declared J6 length".to_string(),
-        ));
-    }
     let mut vec = Vec::new();
     vec.try_reserve_exact(total_length).map_err(|error| {
         KolaError::Err(format!(
             "Unable to allocate {total_length}-byte J6 IPC message: {error}"
         ))
     })?;
-    vec.write_all(&[1, msg_type as u8, 0, 0])?;
-    vec.write_all(&header_length.to_le_bytes())?;
-    vec.write_all(&serialized)?;
+    vec.extend_from_slice(&[1, msg_type as u8, 0, 0]);
+    vec.extend_from_slice(&header_length.to_le_bytes());
+    serde6::serialize_into(&k, &mut vec)?;
+    if vec.len() != total_length {
+        return Err(KolaError::Err(
+            "Serialized q value length differs from its declared J6 length".to_string(),
+        ));
+    }
     if enable_compression {
         Ok(serde6::compress(vec))
     } else {

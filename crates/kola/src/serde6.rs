@@ -5,6 +5,7 @@ use polars::series::Series;
 use polars_arrow::array::{
     Array, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, ListArray, PrimitiveArray, UInt8Array,
+    Utf8ViewArray, View,
 };
 use polars_arrow::bitmap::Bitmap;
 use polars_arrow::datatypes::{ArrowDataType, Field, TimeUnit};
@@ -12,7 +13,6 @@ use polars_arrow::{array::Utf8Array, offset::OffsetsBuffer};
 use polars_buffer::Buffer;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::cmp::min;
-use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use uuid::Uuid;
 // time difference between chrono and q types
@@ -42,12 +42,11 @@ const K_TYPE_NAME: [&str; 20] = [
     "second",
     "time",
 ];
-
 use crate::{
     errors::KolaError,
     types::{
-        get_series_len, validate_guid_series, validate_q_symbol, validate_q_time_series, QLambda,
-        QOperator, K, K_TYPE_SIZE, MAX_VALUE_DEPTH,
+        validate_guid_series, validate_q_symbol, validate_q_time_series, QLambda, QOperator, K,
+        K_TYPE_SIZE, MAX_VALUE_DEPTH,
     },
 };
 
@@ -61,11 +60,11 @@ fn downcast_array<'a, T: 'static>(
         .ok_or_else(|| KolaError::NotAbleToSerializeErr(format!("expected Arrow {expected} array")))
 }
 
-trait WireNumber: Copy {
+trait WireNumber: Copy + bytemuck::Pod {
     const WIDTH: usize;
 
+    #[cfg_attr(target_endian = "little", allow(dead_code))]
     fn from_le_chunk(chunk: &[u8]) -> Self;
-    fn write_le_bytes(self, output: &mut Vec<u8>);
 }
 
 macro_rules! impl_wire_number {
@@ -75,10 +74,6 @@ macro_rules! impl_wire_number {
 
             fn from_le_chunk(chunk: &[u8]) -> Self {
                 <$number>::from_le_bytes(chunk.try_into().expect("validated chunk width"))
-            }
-
-            fn write_le_bytes(self, output: &mut Vec<u8>) {
-                output.extend_from_slice(&self.to_le_bytes());
             }
         }
     };
@@ -91,29 +86,53 @@ impl_wire_number!(f32, 4);
 impl_wire_number!(f64, 8);
 
 fn decode_wire_numbers<T: WireNumber>(bytes: &[u8], context: &str) -> Result<Vec<T>, KolaError> {
+    if !bytes.len().is_multiple_of(T::WIDTH) {
+        return Err(KolaError::DeserializationErr(format!(
+            "{context} payload has {} trailing byte(s)",
+            bytes.len() % T::WIDTH
+        )));
+    }
     let value_count = bytes.len() / T::WIDTH;
-    let mut values = Vec::new();
+    let mut values: Vec<T> = Vec::new();
     values.try_reserve_exact(value_count).map_err(|error| {
         KolaError::DeserializationErr(format!(
             "unable to allocate {context} with {value_count} values: {error}"
         ))
     })?;
-    for chunk in bytes.chunks(T::WIDTH) {
-        if chunk.len() != T::WIDTH {
-            return Err(KolaError::DeserializationErr(format!(
-                "{context} payload has {} trailing byte(s)",
-                chunk.len()
-            )));
-        }
-        values.push(T::from_le_chunk(chunk));
+    #[cfg(target_endian = "little")]
+    // SAFETY: the allocation holds exactly `value_count * T::WIDTH` bytes, the source slice
+    // has the same byte length, and every WireNumber type is plain-old-data whose wire
+    // encoding on little-endian targets matches its in-memory layout.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), values.as_mut_ptr() as *mut u8, bytes.len());
+        values.set_len(value_count);
     }
+    #[cfg(target_endian = "big")]
+    values.extend(bytes.chunks_exact(T::WIDTH).map(T::from_le_chunk));
     Ok(values)
 }
 
 fn write_wire_numbers<T: WireNumber>(output: &mut Vec<u8>, values: &[T]) {
+    #[cfg(target_endian = "little")]
+    output.extend_from_slice(bytemuck::cast_slice(values));
+    #[cfg(target_endian = "big")]
     for value in values {
-        value.write_le_bytes(output);
+        let mut raw = [0u8; 16];
+        let raw = &mut raw[..T::WIDTH];
+        raw.copy_from_slice(&bytemuck::bytes_of(value)[..T::WIDTH]);
+        raw.reverse();
+        output.extend_from_slice(raw);
     }
+}
+
+/// Packs a validity iterator into a bitmap, returning `None` when every value is valid so
+/// downstream kernels can skip null handling entirely.
+fn optional_validity<I>(validity: I) -> Option<Bitmap>
+where
+    I: polars_arrow::trusted_len::TrustedLen<Item = bool>,
+{
+    let bitmap = Bitmap::from_trusted_len_iter(validity);
+    (bitmap.unset_bits() != 0).then_some(bitmap)
 }
 
 fn q_list_length<T>(length: T) -> Result<[u8; 4], KolaError>
@@ -171,9 +190,7 @@ fn take_utf8_until_nul<'a>(
     let tail = bytes.get(*pos..).ok_or_else(|| {
         KolaError::DeserializationErr(format!("{context} starts beyond the available payload"))
     })?;
-    let length = tail
-        .iter()
-        .position(|byte| *byte == 0)
+    let length = memchr::memchr(0, tail)
         .ok_or_else(|| KolaError::DeserializationErr(format!("{context} is not NUL-terminated")))?;
     let end = pos
         .checked_add(length)
@@ -188,8 +205,20 @@ fn take_utf8_until_nul<'a>(
 }
 
 fn take_list_length(bytes: &[u8], pos: &mut usize, context: &str) -> Result<usize, KolaError> {
-    take_bytes::<1>(bytes, pos, &format!("{context} attribute"))?;
-    let raw_length = i32::from_le_bytes(take_bytes::<4>(bytes, pos, &format!("{context} length"))?);
+    // One bounds check for the attribute byte plus the 4-byte length; error paths only
+    // allocate on failure so per-row callers stay allocation-free.
+    let end = pos.checked_add(5).ok_or_else(|| {
+        KolaError::DeserializationErr(format!("{context} header offset overflowed"))
+    })?;
+    let header = bytes.get(*pos..end).ok_or_else(|| {
+        KolaError::DeserializationErr(format!("{context} header omitted its 5 byte(s)"))
+    })?;
+    let raw_length = i32::from_le_bytes(
+        header[1..5]
+            .try_into()
+            .expect("list header slice is exactly five bytes"),
+    );
+    *pos = end;
     usize::try_from(raw_length)
         .map_err(|_| KolaError::DeserializationErr(format!("{context} length cannot be negative")))
 }
@@ -220,9 +249,7 @@ fn deserialize_lambda(vec: &[u8], pos: &mut usize, start_pos: usize) -> Result<K
     let context_tail = vec
         .get(start_pos..)
         .ok_or_else(|| KolaError::DeserializationErr("q lambda omitted its context".to_string()))?;
-    let context_length = context_tail
-        .iter()
-        .position(|byte| *byte == 0)
+    let context_length = memchr::memchr(0, context_tail)
         .ok_or_else(|| {
             KolaError::DeserializationErr("q lambda context is not NUL-terminated".to_string())
         })?;
@@ -800,11 +827,8 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                     "q boolean list values must be 0 or 1, got {value}"
                 )));
             }
-            let values = array_vec
-                .iter()
-                .map(|value| *value == 1)
-                .collect::<Vec<_>>();
-            array_box = BooleanArray::from_slice(values).boxed();
+            let values = Bitmap::from_trusted_len_iter(array_vec.iter().map(|value| *value == 1));
+            array_box = BooleanArray::new(ArrowDataType::Boolean, values, None).boxed();
             series = Series::from_arrow(name.into(), array_box)
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             Ok(K::Series(series))
@@ -828,78 +852,85 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
         }
         5 => {
             let values = decode_wire_numbers::<i16>(array_vec, "q short list")?;
-            let bitmap = Bitmap::from_iter(
+            let validity = optional_validity(
                 values
                     .iter()
                     .map(|value| *value > i16::MIN + 1 && *value < i16::MAX),
             );
-            let mut array = Int16Array::from_slice(values);
-            array.set_validity(Some(bitmap));
+            let mut array = Int16Array::from_vec(values);
+            array.set_validity(validity);
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             Ok(K::Series(series))
         }
         6 => {
             let values = decode_wire_numbers::<i32>(array_vec, "q int list")?;
-            let bitmap = Bitmap::from_iter(
+            let validity = optional_validity(
                 values
                     .iter()
                     .map(|value| *value > i32::MIN + 1 && *value < i32::MAX),
             );
-            let mut array = Int32Array::from_slice(values);
-            array.set_validity(Some(bitmap));
+            let mut array = Int32Array::from_vec(values);
+            array.set_validity(validity);
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             Ok(K::Series(series))
         }
         7 => {
             let values = decode_wire_numbers::<i64>(array_vec, "q long list")?;
-            let bitmap = Bitmap::from_iter(
+            let validity = optional_validity(
                 values
                     .iter()
                     .map(|value| *value > i64::MIN + 1 && *value < i64::MAX),
             );
-            let mut array = Int64Array::from_slice(values);
-            array.set_validity(Some(bitmap));
+            let mut array = Int64Array::from_vec(values);
+            array.set_validity(validity);
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             Ok(K::Series(series))
         }
         8 => {
             let values = decode_wire_numbers::<f32>(array_vec, "q real list")?;
-            let bitmap = Bitmap::from_iter(values.iter().map(|value| !value.is_nan()));
-            let mut array = Float32Array::from_slice(values);
-            array.set_validity(Some(bitmap));
+            let validity = optional_validity(values.iter().map(|value| !value.is_nan()));
+            let mut array = Float32Array::from_vec(values);
+            array.set_validity(validity);
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             Ok(K::Series(series))
         }
         9 => {
             let values = decode_wire_numbers::<f64>(array_vec, "q float list")?;
-            let bitmap = Bitmap::from_iter(values.iter().map(|value| !value.is_nan()));
-            let mut array = Float64Array::from_slice(values);
-            array.set_validity(Some(bitmap));
+            let validity = optional_validity(values.iter().map(|value| !value.is_nan()));
+            let mut array = Float64Array::from_vec(values);
+            array.set_validity(validity);
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             Ok(K::Series(series))
         }
         10 => {
             if as_column {
-                if array_vec.iter().any(|byte| !byte.is_ascii()) {
+                if !array_vec.is_ascii() {
                     return Err(KolaError::DeserializationErr(
                         "q char columns require valid one-byte UTF-8 characters".to_string(),
                     ));
                 }
-                let offsets: Vec<i64> = (0..=length as i64).collect();
-                array_box = Utf8Array::<i64>::new(
-                    ArrowDataType::LargeUtf8,
-                    OffsetsBuffer::try_from(offsets)
-                        .map_err(|error| KolaError::DeserializationErr(error.to_string()))?,
-                    Buffer::from(array_vec.to_vec()),
-                    None,
-                )
-                .boxed();
-                series = Series::from_arrow(name.into(), array_box)
+                let views: Vec<View> = array_vec
+                    .iter()
+                    .map(|byte| View::new_inline(std::slice::from_ref(byte)))
+                    .collect();
+                // SAFETY: every view is inline (single ASCII byte, well below the 12-byte
+                // inline limit) and references no data buffers.
+                let array = unsafe {
+                    Utf8ViewArray::new_unchecked(
+                        ArrowDataType::Utf8View,
+                        views.into(),
+                        Buffer::default(),
+                        None,
+                        Some(array_vec.len()),
+                        0,
+                    )
+                };
+                series = Series::from_arrow(name.into(), array.boxed())
                     .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
                 Ok(K::Series(series))
             } else {
@@ -907,31 +938,42 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             }
         }
         11 => {
-            let mut symbol_pos = pos;
+            // NUL is a one-byte UTF-8 code point, so validating the whole payload once also
+            // proves every NUL-delimited symbol is valid UTF-8.
+            std::str::from_utf8(array_vec).map_err(|error| {
+                KolaError::DeserializationErr(format!(
+                    "q symbol-list value is not valid UTF-8: {error}"
+                ))
+            })?;
             let mut values = Vec::with_capacity(array_vec.len().saturating_sub(length));
             let mut offsets = Vec::with_capacity(length + 1);
             offsets.push(0i64);
+            let mut cursor = 0usize;
             for _ in 0..length {
-                let symbol = take_utf8_until_nul(vec, &mut symbol_pos, "q symbol-list value")?;
-                values.extend_from_slice(symbol.as_bytes());
+                let terminator =
+                    memchr::memchr(0, &array_vec[cursor..]).ok_or_else(|| {
+                        KolaError::DeserializationErr(
+                            "q symbol-list value is not NUL-terminated".to_string(),
+                        )
+                    })?;
+                values.extend_from_slice(&array_vec[cursor..cursor + terminator]);
                 offsets.push(i64::try_from(values.len()).map_err(|_| {
                     KolaError::DeserializationErr("q symbol-list offsets overflowed".to_string())
                 })?);
+                cursor += terminator + 1;
             }
-            if symbol_pos != vec.len() {
+            if cursor != array_vec.len() {
                 return Err(KolaError::DeserializationErr(format!(
                     "q symbol list has {} trailing byte(s)",
-                    vec.len() - symbol_pos
+                    array_vec.len() - cursor
                 )));
             }
-            array_box = Utf8Array::<i64>::new(
-                ArrowDataType::LargeUtf8,
-                OffsetsBuffer::try_from(offsets)
-                    .map_err(|error| KolaError::DeserializationErr(error.to_string()))?,
-                Buffer::from(values),
-                None,
-            )
-            .boxed();
+            // SAFETY: offsets start at zero and only ever grow by the pushed slice lengths,
+            // so they are monotonically non-decreasing and bounded by values.len().
+            let offsets = unsafe { OffsetsBuffer::new_unchecked(Buffer::from(offsets)) };
+            array_box =
+                Utf8Array::<i64>::new(ArrowDataType::LargeUtf8, offsets, Buffer::from(values), None)
+                    .boxed();
             series = Series::from_arrow(name.into(), array_box)
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             if as_column {
@@ -945,42 +987,35 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             Ok(K::Series(series))
         }
         12 => {
-            let q_values = decode_wire_numbers::<i64>(array_vec, "q timestamp list")?;
-            let values = q_values
-                .into_iter()
-                .map(|value| match value {
-                    i64::MIN => Ok(value),
-                    value => unix_timestamp_nanoseconds(value),
-                })
-                .collect::<Result<Vec<_>, KolaError>>()?;
-            let bitmap = Bitmap::from_iter(values.iter().map(|value| *value != i64::MIN));
+            let mut values = decode_wire_numbers::<i64>(array_vec, "q timestamp list")?;
+            for value in values.iter_mut() {
+                if *value != i64::MIN {
+                    *value = unix_timestamp_nanoseconds(*value)?;
+                }
+            }
+            let validity = optional_validity(values.iter().map(|value| *value != i64::MIN));
             let array = PrimitiveArray::new(
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
                 values.into(),
-                Some(bitmap),
+                validity,
             );
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             Ok(K::Series(series))
         }
         14 => {
-            let q_values = decode_wire_numbers::<i32>(array_vec, "q date list")?;
-            let bitmap = Bitmap::from_iter(q_values.iter().map(|value| *value != i32::MIN));
-            let values = q_values
-                .into_iter()
-                .map(|value| {
-                    if value == i32::MIN {
-                        Ok(value)
-                    } else {
-                        value.checked_add(10_957).ok_or_else(|| {
-                            KolaError::DeserializationErr(
-                                "q date is outside Polars' representable range".to_string(),
-                            )
-                        })
-                    }
-                })
-                .collect::<Result<Vec<_>, KolaError>>()?;
-            let array = PrimitiveArray::new(ArrowDataType::Date32, values.into(), Some(bitmap));
+            let mut values = decode_wire_numbers::<i32>(array_vec, "q date list")?;
+            let validity = optional_validity(values.iter().map(|value| *value != i32::MIN));
+            for value in values.iter_mut() {
+                if *value != i32::MIN {
+                    *value = value.checked_add(10_957).ok_or_else(|| {
+                        KolaError::DeserializationErr(
+                            "q date is outside Polars' representable range".to_string(),
+                        )
+                    })?;
+                }
+            }
+            let array = PrimitiveArray::new(ArrowDataType::Date32, values.into(), validity);
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
             Ok(K::Series(series))
@@ -1011,11 +1046,11 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
                     }
                 })
                 .collect::<Result<Vec<_>, KolaError>>()?;
-            let bitmap = Bitmap::from_iter(values.iter().map(|value| *value != i64::MIN));
+            let validity = optional_validity(values.iter().map(|value| *value != i64::MIN));
             let array = PrimitiveArray::new(
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
                 values.into(),
-                Some(bitmap),
+                validity,
             );
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
@@ -1023,11 +1058,11 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
         }
         16 => {
             let values = decode_wire_numbers::<i64>(array_vec, "q timespan list")?;
-            let bitmap = Bitmap::from_iter(values.iter().map(|value| *value != i64::MIN));
+            let validity = optional_validity(values.iter().map(|value| *value != i64::MIN));
             let array = PrimitiveArray::new(
                 ArrowDataType::Duration(TimeUnit::Nanosecond),
                 values.into(),
-                Some(bitmap),
+                validity,
             );
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
@@ -1035,7 +1070,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
         }
         17..=19 => {
             let q_values = decode_wire_numbers::<i32>(array_vec, "q time list")?;
-            let bitmap = Bitmap::from_iter(q_values.iter().map(|value| *value != i32::MIN));
+            let validity = optional_validity(q_values.iter().map(|value| *value != i32::MIN));
             let multiplier = match k_type {
                 17 => 60_000_000_000,
                 18 => 1_000_000_000,
@@ -1062,7 +1097,7 @@ fn deserialize_series(vec: &[u8], k_type: u8, as_column: bool) -> Result<K, Kola
             let array = PrimitiveArray::new(
                 ArrowDataType::Time64(TimeUnit::Nanosecond),
                 values.into(),
-                Some(bitmap),
+                validity,
             );
             series = Series::from_arrow(name.into(), array.boxed())
                 .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
@@ -1198,8 +1233,9 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
     }
 
     let field = create_field(k_type, name)?;
-    let outer_offsets = OffsetsBuffer::<i32>::try_from(offsets)
-        .map_err(|error| KolaError::DeserializationErr(error.to_string()))?;
+    // SAFETY: outer offsets start at zero and grow by checked additions only, so they are
+    // monotonically non-decreasing.
+    let outer_offsets = unsafe { OffsetsBuffer::<i32>::new_unchecked(Buffer::from(offsets)) };
     let array_box: Box<dyn Array> = match k_type {
         1 => {
             if let Some(value) = values.iter().find(|value| **value > 1) {
@@ -1207,107 +1243,107 @@ fn deserialize_nested_array(vec: &[u8]) -> Result<K, KolaError> {
                     "q nested boolean values must be 0 or 1, got {value}"
                 )));
             }
-            BooleanArray::from_slice(
-                values
-                    .into_iter()
-                    .map(|value| value == 1)
-                    .collect::<Vec<_>>(),
-            )
-            .boxed()
+            let bits = Bitmap::from_trusted_len_iter(values.iter().map(|value| *value == 1));
+            BooleanArray::new(ArrowDataType::Boolean, bits, None).boxed()
         }
         4 => UInt8Array::from_vec(values).boxed(),
         5 => {
             let decoded = decode_wire_numbers::<i16>(&values, "q nested short list")?;
-            let bitmap = Bitmap::from_iter(decoded.iter().map(|value| *value != i16::MIN));
-            let mut array = Int16Array::from_slice(decoded);
-            array.set_validity(Some(bitmap));
+            let validity = optional_validity(decoded.iter().map(|value| *value != i16::MIN));
+            let mut array = Int16Array::from_vec(decoded);
+            array.set_validity(validity);
             array.boxed()
         }
         6 => {
             let decoded = decode_wire_numbers::<i32>(&values, "q nested int list")?;
-            let bitmap = Bitmap::from_iter(decoded.iter().map(|value| *value != i32::MIN));
-            let mut array = Int32Array::from_slice(decoded);
-            array.set_validity(Some(bitmap));
+            let validity = optional_validity(decoded.iter().map(|value| *value != i32::MIN));
+            let mut array = Int32Array::from_vec(decoded);
+            array.set_validity(validity);
             array.boxed()
         }
         7 => {
             let decoded = decode_wire_numbers::<i64>(&values, "q nested long list")?;
-            let bitmap = Bitmap::from_iter(decoded.iter().map(|value| *value != i64::MIN));
-            let mut array = Int64Array::from_slice(decoded);
-            array.set_validity(Some(bitmap));
+            let validity = optional_validity(decoded.iter().map(|value| *value != i64::MIN));
+            let mut array = Int64Array::from_vec(decoded);
+            array.set_validity(validity);
             array.boxed()
         }
         8 => {
             let decoded = decode_wire_numbers::<f32>(&values, "q nested real list")?;
-            let bitmap = Bitmap::from_iter(decoded.iter().map(|value| !value.is_nan()));
-            let mut array = Float32Array::from_slice(decoded);
-            array.set_validity(Some(bitmap));
+            let validity = optional_validity(decoded.iter().map(|value| !value.is_nan()));
+            let mut array = Float32Array::from_vec(decoded);
+            array.set_validity(validity);
             array.boxed()
         }
         9 => {
             let decoded = decode_wire_numbers::<f64>(&values, "q nested float list")?;
-            let bitmap = Bitmap::from_iter(decoded.iter().map(|value| !value.is_nan()));
-            let mut array = Float64Array::from_slice(decoded);
-            array.set_validity(Some(bitmap));
+            let validity = optional_validity(decoded.iter().map(|value| !value.is_nan()));
+            let mut array = Float64Array::from_vec(decoded);
+            array.set_validity(validity);
             array.boxed()
         }
         10 => {
-            for offsets in outer_offsets.as_ref().windows(2) {
-                let start = usize::try_from(offsets[0]).map_err(|_| {
-                    KolaError::DeserializationErr(
-                        "q nested-char offset cannot be negative".to_string(),
-                    )
-                })?;
-                let end = usize::try_from(offsets[1]).map_err(|_| {
-                    KolaError::DeserializationErr(
-                        "q nested-char offset cannot be negative".to_string(),
-                    )
-                })?;
-                std::str::from_utf8(&values[start..end]).map_err(|error| {
-                    KolaError::DeserializationErr(format!(
-                        "q nested char value is not valid UTF-8: {error}"
-                    ))
-                })?;
+            // Validate the concatenated payload once; a row is valid UTF-8 exactly when the
+            // whole buffer is valid and every row boundary lands on a code-point start
+            // (UTF-8 is self-synchronizing).
+            std::str::from_utf8(&values).map_err(|error| {
+                KolaError::DeserializationErr(format!(
+                    "q nested char value is not valid UTF-8: {error}"
+                ))
+            })?;
+            let boundaries = outer_offsets.as_ref();
+            let mut views = Vec::with_capacity(outer_offsets.len_proxy());
+            for window in boundaries.windows(2) {
+                let (start, end) = (window[0] as usize, window[1] as usize);
+                if start < values.len() && values[start] & 0b1100_0000 == 0b1000_0000 {
+                    return Err(KolaError::DeserializationErr(
+                        "q nested char value is not valid UTF-8: row boundary splits a code point"
+                            .to_string(),
+                    ));
+                }
+                views.push(View::new_from_bytes(&values[start..end], 0, start as u32));
             }
+            let total_bytes_len = values.len();
+            // SAFETY: views were derived from monotonic in-range offsets over the single
+            // data buffer registered below, and the payload was UTF-8 validated above with
+            // every row boundary checked to sit on a code-point start.
+            unsafe {
+                Utf8ViewArray::new_unchecked(
+                    ArrowDataType::Utf8View,
+                    views.into(),
+                    Buffer::from(vec![Buffer::from(values)]),
+                    None,
+                    Some(total_bytes_len),
+                    total_bytes_len,
+                )
+            }
+            .boxed()
+        }
+        11 => {
+            let symbol_offsets = symbol_offsets.expect("symbol offsets exist for symbol children");
+            // SAFETY: symbol offsets start at zero and only grow by pushed slice lengths.
+            let symbol_offsets =
+                unsafe { OffsetsBuffer::<i64>::new_unchecked(Buffer::from(symbol_offsets)) };
             Utf8Array::<i64>::new(
                 ArrowDataType::LargeUtf8,
-                OffsetsBuffer::<i64>::try_from(
-                    outer_offsets
-                        .as_ref()
-                        .iter()
-                        .map(|offset| i64::from(*offset))
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(|error| KolaError::DeserializationErr(error.to_string()))?,
+                symbol_offsets,
                 Buffer::from(values),
                 None,
             )
             .boxed()
         }
-        11 => Utf8Array::<i64>::new(
-            ArrowDataType::LargeUtf8,
-            OffsetsBuffer::try_from(
-                symbol_offsets.expect("symbol offsets exist for symbol children"),
-            )
-            .map_err(|error| KolaError::DeserializationErr(error.to_string()))?,
-            Buffer::from(values),
-            None,
-        )
-        .boxed(),
         12 => {
-            let q_values = decode_wire_numbers::<i64>(&values, "q nested timestamp list")?;
-            let decoded = q_values
-                .into_iter()
-                .map(|value| match value {
-                    i64::MIN => Ok(value),
-                    value => unix_timestamp_nanoseconds(value),
-                })
-                .collect::<Result<Vec<_>, KolaError>>()?;
-            let bitmap = Bitmap::from_iter(decoded.iter().map(|value| *value != i64::MIN));
+            let mut decoded = decode_wire_numbers::<i64>(&values, "q nested timestamp list")?;
+            for value in decoded.iter_mut() {
+                if *value != i64::MIN {
+                    *value = unix_timestamp_nanoseconds(*value)?;
+                }
+            }
+            let validity = optional_validity(decoded.iter().map(|value| *value != i64::MIN));
             PrimitiveArray::new(
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
                 decoded.into(),
-                Some(bitmap),
+                validity,
             )
             .boxed()
         }
@@ -1432,8 +1468,15 @@ fn decompress_unchecked(vec: &[u8], de_vec: &mut [u8], start_pos: usize) {
             c_pos += 1;
             r = vec[c_pos] as usize;
             c_pos += 1;
-            for j in 0..r + 2 {
-                de_vec[d_pos + j] = de_vec[s + j]
+            if s + r + 2 <= d_pos {
+                // The match lies entirely behind the write cursor: one memmove.
+                de_vec.copy_within(s..s + r + 2, d_pos);
+            } else {
+                // Self-referencing run: must copy byte-serially so freshly written
+                // bytes feed later iterations.
+                for j in 0..r + 2 {
+                    de_vec[d_pos + j] = de_vec[s + j]
+                }
             }
             d_pos += 2;
         } else {
@@ -1544,76 +1587,68 @@ pub fn compress(vec: Vec<u8>) -> Vec<u8> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
-    serialize_with_depth(k, 0)
+    let k_length = k.j6_len()?;
+    let mut vec = Vec::with_capacity(k_length);
+    serialize_into(k, &mut vec)?;
+    Ok(vec)
 }
 
-fn serialize_with_depth(k: &K, depth: usize) -> Result<Vec<u8>, KolaError> {
-    let k_length = k.j6_len_with_depth(depth)?;
-    let mut vec: Vec<u8>;
+/// Callers must pre-validate `k` with [`K::j6_len`], which enforces the nesting-depth limit
+/// and sizes the output buffer.
+pub(crate) fn serialize_into(k: &K, vec: &mut Vec<u8>) -> Result<(), KolaError> {
     match k {
         K::Boolean(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[255, (*k as u8)]).unwrap();
+            vec.extend_from_slice(&[255, (*k as u8)]);
         }
         K::Guid(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[254u8]).unwrap();
-            vec.write_all(k.as_bytes()).unwrap();
+            vec.push(254u8);
+            vec.extend_from_slice(k.as_bytes());
         }
         K::U8(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[252, *k]).unwrap();
+            vec.extend_from_slice(&[252, *k]);
         }
         K::I16(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[251]).unwrap();
-            vec.write_all(&k.to_le_bytes()).unwrap();
+            vec.push(251);
+            vec.extend_from_slice(&k.to_le_bytes());
         }
         K::I32(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[250]).unwrap();
-            vec.write_all(&k.to_le_bytes()).unwrap();
+            vec.push(250);
+            vec.extend_from_slice(&k.to_le_bytes());
         }
         K::I64(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[249]).unwrap();
-            vec.write_all(&k.to_le_bytes()).unwrap();
+            vec.push(249);
+            vec.extend_from_slice(&k.to_le_bytes());
         }
         K::F32(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[248]).unwrap();
-            vec.write_all(&k.to_le_bytes()).unwrap();
+            vec.push(248);
+            vec.extend_from_slice(&k.to_le_bytes());
         }
         K::F64(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[247]).unwrap();
-            vec.write_all(&k.to_le_bytes()).unwrap();
+            vec.push(247);
+            vec.extend_from_slice(&k.to_le_bytes());
         }
         K::Char(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[246, *k]).unwrap();
+            vec.extend_from_slice(&[246, *k]);
         }
         K::Symbol(k) => {
             validate_q_symbol(k)?;
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[245]).unwrap();
-            vec.write_all(k.as_bytes()).unwrap();
-            vec.write_all(&[0]).unwrap();
+            vec.push(245);
+            vec.extend_from_slice(k.as_bytes());
+            vec.push(0);
         }
         K::CharVector(k) => {
             let length = q_list_length(k.len())?;
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[10, 0]).unwrap();
-            vec.write_all(&length).unwrap();
-            vec.write_all(k).unwrap();
+            vec.extend_from_slice(&[10, 0]);
+            vec.extend_from_slice(&length);
+            vec.extend_from_slice(k);
         }
         K::String(k) => {
             let length = q_list_length(k.len())?;
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[10, 0]).unwrap();
-            vec.write_all(&length).unwrap();
-            vec.write_all(k.as_bytes()).unwrap();
+            vec.extend_from_slice(&[10, 0]);
+            vec.extend_from_slice(&length);
+            vec.extend_from_slice(k.as_bytes());
         }
         // to timestamp
         K::DateTime(k) => {
@@ -1623,114 +1658,100 @@ fn serialize_with_depth(k: &K, depth: usize) -> Result<Vec<u8>, KolaError> {
                 )
             })?;
             let q_nanoseconds = q_timestamp_nanoseconds(unix_nanoseconds)?;
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[244]).unwrap();
-            vec.write_all(&q_nanoseconds.to_le_bytes()).unwrap();
+            vec.push(244);
+            vec.extend_from_slice(&q_nanoseconds.to_le_bytes());
         }
         // to date
         K::Date(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[242]).unwrap();
+            vec.push(242);
             let days = k.num_days_from_ce().checked_sub(DAY_DIFF).ok_or_else(|| {
                 KolaError::NotAbleToSerializeErr(
                     "date is outside q's representable range".to_string(),
                 )
             })?;
-            vec.write_all(&days.to_le_bytes()).unwrap();
+            vec.extend_from_slice(&days.to_le_bytes());
         }
         // to time
         K::Time(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[237]).unwrap();
+            vec.push(237);
             let milliseconds = k.num_seconds_from_midnight() * 1000 + k.nanosecond() / 1000000;
-            vec.write_all(&(milliseconds as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&(milliseconds as i32).to_le_bytes());
         }
         // to timespan
         K::Duration(k) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[240]).unwrap();
+            vec.push(240);
             let ns = k.num_nanoseconds().ok_or_else(|| {
                 KolaError::NotAbleToSerializeErr(
                     "duration is outside q's representable nanosecond range".to_string(),
                 )
             })?;
-            vec.write_all(&ns.to_le_bytes()).unwrap();
+            vec.extend_from_slice(&ns.to_le_bytes());
         }
         K::MixedList(l) => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[0, 0]).unwrap();
-            vec.write_all(&q_list_length(l.len())?).unwrap();
+            vec.extend_from_slice(&[0, 0]);
+            vec.extend_from_slice(&q_list_length(l.len())?);
             for atom in l.iter() {
-                vec.write_all(&serialize_with_depth(atom, depth + 1)?)
-                    .unwrap();
+                serialize_into(atom, vec)?;
             }
         }
         // to list
         K::Series(k) => {
-            vec = serialize_series(k, k_length)?;
+            serialize_series_into(k, vec)?;
         }
         // to table
         K::DataFrame(k) => {
-            vec = Vec::with_capacity(k_length);
             let column_names = k.get_column_names();
             let column_count =
                 i32::try_from(column_names.len()).map_err(|_| KolaError::OverLengthErr())?;
-            vec.write_all(&[98, 0, 99, 11, 0]).unwrap();
-            vec.write_all(&column_count.to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[98, 0, 99, 11, 0]);
+            vec.extend_from_slice(&column_count.to_le_bytes());
             for name in column_names {
                 validate_q_symbol(name)?;
-                vec.write_all(name.as_bytes()).unwrap();
-                vec.write_all(&[0]).unwrap();
+                vec.extend_from_slice(name.as_bytes());
+                vec.push(0);
             }
-            vec.write_all(&[0, 0]).unwrap();
-            vec.write_all(&column_count.to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[0, 0]);
+            vec.extend_from_slice(&column_count.to_le_bytes());
             for column in k.columns() {
-                let series = column.as_materialized_series();
-                vec.write_all(&serialize_series(series, get_series_len(series)?)?)
-                    .unwrap();
+                serialize_series_into(column.as_materialized_series(), vec)?;
             }
         }
         K::Operator(operator) => {
-            vec = Vec::with_capacity(k_length);
             let (k_type, opcode) = operator.wire_value();
-            vec.write_all(&[k_type, opcode]).unwrap();
+            vec.extend_from_slice(&[k_type, opcode]);
         }
         K::Lambda(lambda) => {
             let source_length = q_list_length(lambda.source().len())?;
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[100]).unwrap();
-            vec.write_all(lambda.context().as_bytes()).unwrap();
-            vec.write_all(&[0, 10, 0]).unwrap();
-            vec.write_all(&source_length).unwrap();
-            vec.write_all(lambda.source().as_bytes()).unwrap();
+            vec.push(100);
+            vec.extend_from_slice(lambda.context().as_bytes());
+            vec.extend_from_slice(&[0, 10, 0]);
+            vec.extend_from_slice(&source_length);
+            vec.extend_from_slice(lambda.source().as_bytes());
         }
         // to (::)
         K::Null => {
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[101, 0]).unwrap();
+            vec.extend_from_slice(&[101, 0]);
         }
         K::Dict(dict) => {
             let length = i32::try_from(dict.len()).map_err(|_| KolaError::OverLengthErr())?;
             if length == 0 {
                 return Err(KolaError::Err("Not supported empty dictionary".to_string()));
             };
-            vec = Vec::with_capacity(k_length);
-            vec.write_all(&[99, 11, 0]).unwrap();
-            vec.write_all(&length.to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[99, 11, 0]);
+            vec.extend_from_slice(&length.to_le_bytes());
             for key in dict.keys() {
                 validate_q_symbol(key)?;
-                vec.write_all(key.as_bytes()).unwrap();
-                vec.write_all(&[0]).unwrap();
+                vec.extend_from_slice(key.as_bytes());
+                vec.push(0);
             }
-            vec.write_all(&[0, 0]).unwrap();
-            vec.write_all(&length.to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[0, 0]);
+            vec.extend_from_slice(&length.to_le_bytes());
             for value in dict.values() {
-                vec.write_all(&serialize_with_depth(value, depth + 1)?)
-                    .unwrap();
+                serialize_into(value, vec)?;
             }
         }
     };
-    Ok(vec)
+    Ok(())
 }
 
 fn write_nested_wire_lists<T: WireNumber>(
@@ -1758,7 +1779,7 @@ fn write_nested_wire_lists<T: WireNumber>(
     Ok(())
 }
 
-fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaError> {
+fn serialize_series_into(series: &Series, vec: &mut Vec<u8>) -> Result<(), KolaError> {
     let rechunked;
     let series = if series.n_chunks() > 1 {
         rechunked = series.rechunk();
@@ -1766,115 +1787,149 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
     } else {
         series
     };
-    let mut vec: Vec<u8> = Vec::with_capacity(k_length);
     let k_length = series.len();
     if k_length > i32::MAX as usize {
         return Err(KolaError::OverLengthErr());
     }
+    let list_header = (k_length as i32).to_le_bytes();
     match series.dtype() {
         PolarsDataType::Boolean => {
-            vec.write_all(&[1, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[1, 0]);
+            vec.extend_from_slice(&list_header);
             let physical = series.to_physical_repr();
             let values = physical
                 .bool()
                 .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
-            for value in values.iter() {
-                vec.write_all(&[value.unwrap_or(false) as u8]).unwrap();
-            }
+            vec.reserve(k_length);
+            vec.extend(values.iter().map(|value| value.unwrap_or(false) as u8));
         }
         PolarsDataType::UInt8 => {
-            vec.write_all(&[4, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[4, 0]);
+            vec.extend_from_slice(&list_header);
             let physical = series.to_physical_repr();
             let values = physical
                 .u8()
                 .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
-            for value in values.iter() {
-                vec.write_all(&[value.unwrap_or(0)]).unwrap();
+            match values.cont_slice() {
+                Ok(values) => vec.extend_from_slice(values),
+                Err(_) => {
+                    vec.reserve(k_length);
+                    vec.extend(values.iter().map(|value| value.unwrap_or(0)));
+                }
             }
         }
         PolarsDataType::Int16 => {
-            vec.write_all(&[5, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[5, 0]);
+            vec.extend_from_slice(&list_header);
             let values = series
                 .i16()
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
-                .iter()
-                .map(|value| value.unwrap_or(i16::MIN))
-                .collect::<Vec<_>>();
-            write_wire_numbers(&mut vec, &values);
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            match values.cont_slice() {
+                Ok(values) => write_wire_numbers(vec, values),
+                Err(_) => {
+                    let values = values
+                        .iter()
+                        .map(|value| value.unwrap_or(i16::MIN))
+                        .collect::<Vec<_>>();
+                    write_wire_numbers(vec, &values);
+                }
+            }
         }
         PolarsDataType::Int32 => {
-            vec.write_all(&[6, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[6, 0]);
+            vec.extend_from_slice(&list_header);
             let values = series
                 .i32()
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
-                .iter()
-                .map(|value| value.unwrap_or(i32::MIN))
-                .collect::<Vec<_>>();
-            write_wire_numbers(&mut vec, &values);
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            match values.cont_slice() {
+                Ok(values) => write_wire_numbers(vec, values),
+                Err(_) => {
+                    let values = values
+                        .iter()
+                        .map(|value| value.unwrap_or(i32::MIN))
+                        .collect::<Vec<_>>();
+                    write_wire_numbers(vec, &values);
+                }
+            }
         }
         PolarsDataType::Int64 => {
-            vec.write_all(&[7, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[7, 0]);
+            vec.extend_from_slice(&list_header);
             let values = series
                 .i64()
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
-                .iter()
-                .map(|value| value.unwrap_or(i64::MIN))
-                .collect::<Vec<_>>();
-            write_wire_numbers(&mut vec, &values);
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            match values.cont_slice() {
+                Ok(values) => write_wire_numbers(vec, values),
+                Err(_) => {
+                    let values = values
+                        .iter()
+                        .map(|value| value.unwrap_or(i64::MIN))
+                        .collect::<Vec<_>>();
+                    write_wire_numbers(vec, &values);
+                }
+            }
         }
         PolarsDataType::Float32 => {
-            vec.write_all(&[8, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[8, 0]);
+            vec.extend_from_slice(&list_header);
             let values = series
                 .f32()
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
-                .iter()
-                .map(|value| value.unwrap_or(f32::NAN))
-                .collect::<Vec<_>>();
-            write_wire_numbers(&mut vec, &values);
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            match values.cont_slice() {
+                Ok(values) => write_wire_numbers(vec, values),
+                Err(_) => {
+                    let values = values
+                        .iter()
+                        .map(|value| value.unwrap_or(f32::NAN))
+                        .collect::<Vec<_>>();
+                    write_wire_numbers(vec, &values);
+                }
+            }
         }
         PolarsDataType::Float64 => {
-            vec.write_all(&[9, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[9, 0]);
+            vec.extend_from_slice(&list_header);
             let values = series
                 .f64()
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
-                .iter()
-                .map(|value| value.unwrap_or(f64::NAN))
-                .collect::<Vec<_>>();
-            write_wire_numbers(&mut vec, &values);
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+            match values.cont_slice() {
+                Ok(values) => write_wire_numbers(vec, values),
+                Err(_) => {
+                    let values = values
+                        .iter()
+                        .map(|value| value.unwrap_or(f64::NAN))
+                        .collect::<Vec<_>>();
+                    write_wire_numbers(vec, &values);
+                }
+            }
         }
         PolarsDataType::String => {
-            vec.write_all(&[0, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[0, 0]);
+            vec.extend_from_slice(&list_header);
             let physical = series.to_physical_repr();
             let values = physical
                 .str()
                 .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
             for value in values.iter() {
-                vec.write_all(&[10, 0]).unwrap();
                 if let Some(value) = value {
-                    vec.write_all(&q_list_length(value.len())?).unwrap();
-                    vec.write_all(value.as_bytes()).unwrap();
+                    let length = q_list_length(value.len())?;
+                    vec.extend_from_slice(&[10, 0]);
+                    vec.extend_from_slice(&length);
+                    vec.extend_from_slice(value.as_bytes());
                 } else {
-                    vec.write_all(&[0, 0, 0, 0]).unwrap();
+                    vec.extend_from_slice(&[10, 0, 0, 0, 0, 0]);
                 }
             }
         }
         PolarsDataType::Date => {
-            vec.write_all(&[14, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[14, 0]);
+            vec.extend_from_slice(&list_header);
             let physical = series
-                .cast(&PolarsDataType::Int32)
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
-            let values = physical
+                .to_physical_repr()
                 .i32()
                 .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
+                .clone();
+            let values = physical
                 .iter()
                 .map(|value| match value {
                     None => Ok(i32::MIN),
@@ -1885,20 +1940,19 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     }),
                 })
                 .collect::<Result<Vec<_>, KolaError>>()?;
-            write_wire_numbers(&mut vec, &values);
+            write_wire_numbers(vec, &values);
         }
         PolarsDataType::Datetime(unit, _) => {
             let physical = series
-                .cast(&PolarsDataType::Int64)
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
-            let values = physical
+                .to_physical_repr()
                 .i64()
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
+                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
+                .clone();
             match unit {
                 PolarTimeUnit::Milliseconds => {
-                    vec.write_all(&[15, 0]).unwrap();
-                    vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
-                    let datetimes = values
+                    vec.extend_from_slice(&[15, 0]);
+                    vec.extend_from_slice(&list_header);
+                    let datetimes = physical
                         .iter()
                         .map(|value| {
                             value
@@ -1906,17 +1960,17 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                                 .unwrap_or(f64::NAN)
                         })
                         .collect::<Vec<_>>();
-                    write_wire_numbers(&mut vec, &datetimes);
+                    write_wire_numbers(vec, &datetimes);
                 }
                 PolarTimeUnit::Microseconds | PolarTimeUnit::Nanoseconds => {
-                    vec.write_all(&[12, 0]).unwrap();
-                    vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+                    vec.extend_from_slice(&[12, 0]);
+                    vec.extend_from_slice(&list_header);
                     let multiplier = match unit {
                         PolarTimeUnit::Nanoseconds => 1,
                         PolarTimeUnit::Microseconds => 1_000,
                         PolarTimeUnit::Milliseconds => unreachable!(),
                     };
-                    let timestamps = values
+                    let timestamps = physical
                         .iter()
                         .map(|value| match value {
                             None => Ok(i64::MIN),
@@ -1932,24 +1986,24 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                             }
                         })
                         .collect::<Result<Vec<_>, KolaError>>()?;
-                    write_wire_numbers(&mut vec, &timestamps);
+                    write_wire_numbers(vec, &timestamps);
                 }
             }
         }
         PolarsDataType::Duration(unit) => {
-            vec.write_all(&[16, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[16, 0]);
+            vec.extend_from_slice(&list_header);
             let multiplier = match unit {
                 PolarTimeUnit::Nanoseconds => 1,
                 PolarTimeUnit::Microseconds => 1_000,
                 PolarTimeUnit::Milliseconds => 1_000_000,
             };
             let physical = series
-                .cast(&PolarsDataType::Int64)
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
-            let durations = physical
+                .to_physical_repr()
                 .i64()
                 .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
+                .clone();
+            let durations = physical
                 .iter()
                 .map(|value| match value {
                     None => Ok(i64::MIN),
@@ -1960,18 +2014,18 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     }),
                 })
                 .collect::<Result<Vec<_>, KolaError>>()?;
-            write_wire_numbers(&mut vec, &durations);
+            write_wire_numbers(vec, &durations);
         }
         PolarsDataType::Time => {
             validate_q_time_series(series)?;
-            vec.write_all(&[19, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[19, 0]);
+            vec.extend_from_slice(&list_header);
             let physical = series
-                .cast(&PolarsDataType::Int64)
-                .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
-            let times = physical
+                .to_physical_repr()
                 .i64()
                 .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?
+                .clone();
+            let times = physical
                 .iter()
                 .map(|value| match value {
                     None => Ok(i32::MIN),
@@ -1982,11 +2036,11 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     }),
                 })
                 .collect::<Result<Vec<_>, KolaError>>()?;
-            write_wire_numbers(&mut vec, &times);
+            write_wire_numbers(vec, &times);
         }
         PolarsDataType::Array(data_type, size) => {
-            vec.write_all(&[0, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[0, 0]);
+            vec.extend_from_slice(&list_header);
             let array = downcast_array::<FixedSizeListArray>(
                 series.array().unwrap().chunks()[0].as_ref(),
                 "FixedSizeList",
@@ -2001,13 +2055,13 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                     let array = downcast_array::<BooleanArray>(array.values().as_ref(), "Boolean")?;
                     let len_vec = q_list_length(*size)?;
                     for row in 0..k_length {
-                        vec.write_all(&[1, 0]).unwrap();
-                        vec.write_all(&len_vec).unwrap();
+                        vec.extend_from_slice(&[1, 0]);
+                        vec.extend_from_slice(&len_vec);
                         let start = row.checked_mul(*size).ok_or(KolaError::OverLengthErr())?;
                         let end = start.checked_add(*size).ok_or(KolaError::OverLengthErr())?;
+                        vec.reserve(*size);
                         for value in start..end {
-                            vec.write_all(&[array.get(value).unwrap_or(false) as u8])
-                                .unwrap();
+                            vec.push(array.get(value).unwrap_or(false) as u8);
                         }
                     }
                 }
@@ -2019,8 +2073,8 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             }
         }
         PolarsDataType::List(data_type) => {
-            vec.write_all(&[0, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[0, 0]);
+            vec.extend_from_slice(&list_header);
             let list = downcast_array::<ListArray<i64>>(
                 series.list().unwrap().chunks()[0].as_ref(),
                 "List",
@@ -2051,18 +2105,18 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                                 "List offsets cannot be negative".to_string(),
                             )
                         })?;
-                        vec.write_all(&[1, 0]).unwrap();
-                        vec.write_all(&q_list_length(end_offset - start_offset)?)
-                            .unwrap();
+                        vec.extend_from_slice(&[1, 0]);
+                        vec.extend_from_slice(&q_list_length(end_offset - start_offset)?);
+                        vec.reserve(end_offset - start_offset);
                         for value in start_offset..end_offset {
-                            vec.write_all(&[values.get(value).unwrap_or(false) as u8])
-                                .unwrap();
+                            vec.push(values.get(value).unwrap_or(false) as u8);
                         }
                     }
                 }
                 PolarsDataType::UInt8 => {
                     let list = downcast_array::<UInt8Array>(list.values().as_ref(), "UInt8")?;
                     let values = list.values().as_ref();
+                    let has_nulls = list.null_count() > 0;
                     for range in offsets.windows(2) {
                         let start_offset = usize::try_from(range[0]).map_err(|_| {
                             KolaError::NotAbleToSerializeErr(
@@ -2074,17 +2128,24 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                                 "List offsets cannot be negative".to_string(),
                             )
                         })?;
-                        vec.write_all(&[4, 0]).unwrap();
-                        vec.write_all(&q_list_length(end_offset - start_offset)?)
-                            .unwrap();
-                        for (offset, &value) in values[start_offset..end_offset].iter().enumerate()
-                        {
-                            let value = if list.is_null(start_offset + offset) {
-                                0
-                            } else {
-                                value
-                            };
-                            vec.write_all(&[value]).unwrap();
+                        let row = values.get(start_offset..end_offset).ok_or_else(|| {
+                            KolaError::NotAbleToSerializeErr(
+                                "List offsets exceed the child values".to_string(),
+                            )
+                        })?;
+                        vec.extend_from_slice(&[4, 0]);
+                        vec.extend_from_slice(&q_list_length(row.len())?);
+                        if has_nulls {
+                            vec.reserve(row.len());
+                            vec.extend(row.iter().enumerate().map(|(offset, &value)| {
+                                if list.is_null(start_offset + offset) {
+                                    0
+                                } else {
+                                    value
+                                }
+                            }));
+                        } else {
+                            vec.extend_from_slice(row);
                         }
                     }
                 }
@@ -2094,7 +2155,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .iter()
                         .map(|value| value.copied().unwrap_or(i16::MIN))
                         .collect::<Vec<_>>();
-                    write_nested_wire_lists(&mut vec, &values, offsets, 5)?;
+                    write_nested_wire_lists(vec, &values, offsets, 5)?;
                 }
                 PolarsDataType::Int32 => {
                     let array = downcast_array::<Int32Array>(list.values().as_ref(), "Int32")?;
@@ -2102,7 +2163,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .iter()
                         .map(|value| value.copied().unwrap_or(i32::MIN))
                         .collect::<Vec<_>>();
-                    write_nested_wire_lists(&mut vec, &values, offsets, 6)?;
+                    write_nested_wire_lists(vec, &values, offsets, 6)?;
                 }
                 PolarsDataType::Int64 => {
                     let array = downcast_array::<Int64Array>(list.values().as_ref(), "Int64")?;
@@ -2110,7 +2171,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .iter()
                         .map(|value| value.copied().unwrap_or(i64::MIN))
                         .collect::<Vec<_>>();
-                    write_nested_wire_lists(&mut vec, &values, offsets, 7)?;
+                    write_nested_wire_lists(vec, &values, offsets, 7)?;
                 }
                 PolarsDataType::Float32 => {
                     let array = downcast_array::<Float32Array>(list.values().as_ref(), "Float32")?;
@@ -2118,7 +2179,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .iter()
                         .map(|value| value.copied().unwrap_or(f32::NAN))
                         .collect::<Vec<_>>();
-                    write_nested_wire_lists(&mut vec, &values, offsets, 8)?;
+                    write_nested_wire_lists(vec, &values, offsets, 8)?;
                 }
                 PolarsDataType::Float64 => {
                     let array = downcast_array::<Float64Array>(list.values().as_ref(), "Float64")?;
@@ -2126,7 +2187,7 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
                         .iter()
                         .map(|value| value.copied().unwrap_or(f64::NAN))
                         .collect::<Vec<_>>();
-                    write_nested_wire_lists(&mut vec, &values, offsets, 9)?;
+                    write_nested_wire_lists(vec, &values, offsets, 9)?;
                 }
                 _ => {
                     return Err(KolaError::NotSupportedPolarsNestedListTypeErr(
@@ -2139,43 +2200,43 @@ fn serialize_series(series: &Series, k_length: usize) -> Result<Vec<u8>, KolaErr
             let categorical = series
                 .cat32()
                 .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
-            for value in categorical.iter_str().flatten() {
-                validate_q_symbol(value)?;
-            }
-            vec.write_all(&[11, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[11, 0]);
+            vec.extend_from_slice(&list_header);
             for value in categorical.iter_str() {
-                vec.write_all(value.unwrap_or("").as_bytes()).unwrap();
-                vec.write_all(&[0]).unwrap();
+                if let Some(value) = value {
+                    validate_q_symbol(value)?;
+                    vec.extend_from_slice(value.as_bytes());
+                }
+                vec.push(0);
             }
         }
         PolarsDataType::Binary => {
             validate_guid_series(series)?;
-            vec.write_all(&[2, 0]).unwrap();
-            vec.write_all(&(k_length as i32).to_le_bytes()).unwrap();
+            vec.extend_from_slice(&[2, 0]);
+            vec.extend_from_slice(&list_header);
             let array = series
                 .binary()
                 .map_err(|error| KolaError::NotAbleToSerializeErr(error.to_string()))?;
             for chunk in array.chunks() {
                 let values = downcast_array::<BinaryViewArray>(chunk.as_ref(), "BinaryView")?;
                 for value in values.iter() {
-                    vec.write_all(value.unwrap_or(&[0; 16])).unwrap();
+                    vec.extend_from_slice(value.unwrap_or(&[0; 16]));
                 }
             }
         }
         PolarsDataType::Null if k_length == 0 => {
-            vec.write_all(&[0, 0, 0, 0, 0, 0]).unwrap();
+            vec.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
         }
         _ => return Err(KolaError::NotSupportedSeriesTypeErr(series.dtype().clone())),
     }
-    Ok(vec)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use crate::types::{
-        QLambda, QOperator, MIN_Q_TIMESTAMP_UNIX_NANOS, Q_BINARY_PRIMITIVES, Q_TERNARY_PRIMITIVES,
-        Q_UNARY_PRIMITIVES,
+        get_series_len, QLambda, QOperator, MIN_Q_TIMESTAMP_UNIX_NANOS, Q_BINARY_PRIMITIVES,
+        Q_TERNARY_PRIMITIVES, Q_UNARY_PRIMITIVES,
     };
     use indexmap::IndexMap;
     use polars::prelude::{CompatLevel, NamedFrom};
@@ -3351,7 +3412,7 @@ mod tests {
             Err(KolaError::NotAbleToSerializeErr(_))
         ));
         assert!(matches!(
-            serialize_series(&time, 10),
+            serialize_series_into(&time, &mut Vec::new()),
             Err(KolaError::NotAbleToSerializeErr(_))
         ));
 
@@ -3380,7 +3441,7 @@ mod tests {
             Err(KolaError::NotAbleToSerializeErr(_))
         ));
         assert!(matches!(
-            serialize_series(&malformed, 38),
+            serialize_series_into(&malformed, &mut Vec::new()),
             Err(KolaError::NotAbleToSerializeErr(_))
         ));
     }
