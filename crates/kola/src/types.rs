@@ -13,6 +13,65 @@ use crate::errors::KolaError;
 
 pub const K_TYPE_SIZE: [usize; 20] = [0, 1, 16, 0, 1, 2, 4, 8, 4, 8, 1, 0, 8, 4, 4, 8, 8, 4, 4, 4];
 
+// K101 unary primitives, following jkdb/src/ipc.js. Code 0 is K::Null.
+const K101_NAMES: [&str; 44] = [
+    "+:", "-:", "*:", "%:", "&:", "|:", "^:", "=:", "<:", ">:", "$:", ",:", "#:", "_:", "~:", "!:",
+    "?:", "@:", ".:", "0::", "1::", "2::", "avg", "last", "sum", "prd", "min", "max", "exit",
+    "getenv", "abs", "sqrt", "log", "exp", "sin", "asin", "cos", "acos", "tan", "atan", "enlist",
+    "var", "dev", "hopen",
+];
+
+/// A q unary primitive (IPC type 101), including the projection null `::` (255).
+/// Generic null (0) is represented by [`K::Null`].
+///
+/// ```
+/// use kola::types::{K, Operator};
+/// let sum = K::Operator(Operator::try_from("sum").unwrap());
+/// assert_eq!(sum.j6_len().unwrap(), 2);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Operator(u8);
+
+impl Operator {
+    pub fn code(self) -> u8 {
+        self.0
+    }
+
+    pub fn as_str(self) -> &'static str {
+        if self.0 == 255 {
+            "::"
+        } else {
+            K101_NAMES[self.0 as usize - 1]
+        }
+    }
+}
+
+impl TryFrom<u8> for Operator {
+    type Error = KolaError;
+
+    fn try_from(code: u8) -> Result<Self, Self::Error> {
+        match code {
+            1..=44 | 255 => Ok(Self(code)),
+            _ => Err(KolaError::NotSupportedKOperatorErr(code)),
+        }
+    }
+}
+
+impl TryFrom<&str> for Operator {
+    type Error = KolaError;
+
+    fn try_from(name: &str) -> Result<Self, Self::Error> {
+        if name == "::" {
+            return Ok(Self(255));
+        }
+        K101_NAMES
+            .iter()
+            .position(|&candidate| candidate == name)
+            .map(|index| Self(index as u8 + 1))
+            .ok_or_else(|| KolaError::NotAbleToSerializeErr(format!("K101 operator {name}")))
+    }
+}
+
 #[repr(u8)]
 pub enum MsgType {
     Async = 0,
@@ -41,6 +100,7 @@ pub enum K {
     Series(Series),            // list, dictionaries
     DataFrame(DataFrame),      // table and keyed table
     Dict(IndexMap<String, K>), // dict, symbols -> atom or list
+    Operator(Operator),        // K101 unary primitive
     Null,
 }
 
@@ -80,7 +140,7 @@ impl K {
                 }
                 Ok(length)
             }
-            K::Null => Ok(2),
+            K::Null | K::Operator(_) => Ok(2),
             K::Dict(dict) => {
                 let mut length = 13;
                 for (k, v) in dict.iter() {

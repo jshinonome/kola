@@ -4,7 +4,8 @@ use crate::error::PyKolaError::{self, PythonErr};
 use chrono::{Datelike, Timelike};
 use indexmap::IndexMap;
 use kola::connector::Connector;
-use kola::types::{MsgType, K};
+use kola::types::{MsgType, Operator, K};
+use pyo3::exceptions::PyValueError;
 use pyo3::types::{
     PyBool, PyBytes, PyDate, PyDateTime, PyDelta, PyDict, PyFloat, PyInt, PyList, PyString, PyTime,
     PyTuple, PyTzInfo,
@@ -127,6 +128,11 @@ fn cast_k_to_py(py: Python, k: K) -> PyResult<Py<PyAny>> {
         K::Series(k) => PySeries(k).into_py_any(py),
         K::DataFrame(k) => PyDataFrame(k).into_py_any(py),
         K::Null => ().into_py_any(py),
+        K::Operator(operator) => Ok(py
+            .import("kola.operator")?
+            .getattr("Operator")?
+            .call1((operator.as_str(),))?
+            .unbind()),
         K::Dict(dict) => {
             let py_dict = PyDict::new(py);
             for (k, v) in dict.into_iter() {
@@ -257,6 +263,12 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
             k_list.push(cast_to_k(py_any)?);
         }
         Ok(K::MixedList(k_list))
+    } else if any.is_instance(&any.py().import("kola.operator")?.getattr("Operator")?)? {
+        let value = any.getattr("value")?;
+        let name = value.extract::<&str>()?;
+        let operator = Operator::try_from(name)
+            .map_err(|_| PyValueError::new_err(format!("Unknown K101 operator: {name}")))?;
+        Ok(K::Operator(operator))
     } else {
         Err(PythonErr(format!("Not supported python type {:?}", any.get_type(),)).into())
     }

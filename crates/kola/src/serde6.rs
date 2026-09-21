@@ -51,7 +51,7 @@ const K_TYPE_NAME: [&str; 20] = [
 use crate::types::get_series_len;
 use crate::{
     errors::KolaError,
-    types::{K, K_TYPE_SIZE},
+    types::{Operator, K, K_TYPE_SIZE},
 };
 
 pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, KolaError> {
@@ -315,11 +315,14 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
             ))
         }
         101 => {
+            let code = *vec.get(start_pos).ok_or_else(|| {
+                KolaError::DeserializationErr("Missing K101 operator code".to_owned())
+            })?;
             *pos += 1;
-            if vec[start_pos] == 0 {
+            if code == 0 {
                 Ok(K::Null)
             } else {
-                Err(KolaError::NotSupportedKOperatorErr(vec[*pos]))
+                Ok(K::Operator(Operator::try_from(code)?))
             }
         }
         // q error
@@ -1199,6 +1202,9 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             vectors.into_iter().for_each(|v| {
                 vec.write_all(&v).unwrap();
             });
+        }
+        K::Operator(operator) => {
+            vec = vec![101, operator.code()];
         }
         // to (::)
         K::Null => {
@@ -2735,6 +2741,77 @@ mod tests {
     fn serialize_none() {
         let k = K::Null;
         assert_eq!(serialize(&k).unwrap(), [101, 0]);
+    }
+
+    #[test]
+    fn k101_round_trip() {
+        for code in (0u8..=44).chain(std::iter::once(255)) {
+            let bytes = [101, code];
+            let mut pos = 0;
+            let k = deserialize(&bytes, &mut pos, false).unwrap();
+            assert_eq!(pos, bytes.len());
+            assert_eq!(k.j6_len().unwrap(), bytes.len());
+            assert_eq!(serialize(&k).unwrap(), bytes);
+            if code == 0 {
+                assert_eq!(k, K::Null);
+            } else {
+                let operator = Operator::try_from(code).unwrap();
+                assert_eq!(k, K::Operator(operator));
+                assert_eq!(Operator::try_from(operator.as_str()).unwrap(), operator);
+            }
+        }
+    }
+
+    #[test]
+    fn k101_names() {
+        for (name, code) in [
+            ("+:", 1),
+            (".:", 19),
+            ("0::", 20),
+            ("2::", 22),
+            ("avg", 23),
+            ("sum", 25),
+            ("enlist", 41),
+            ("hopen", 44),
+            ("::", 255),
+        ] {
+            let operator = Operator::try_from(name).unwrap();
+            assert_eq!(operator.code(), code);
+            assert_eq!(operator.as_str(), name);
+            assert_eq!(serialize(&K::Operator(operator)).unwrap(), [101, code]);
+        }
+        assert!(Operator::try_from("+").is_err());
+        assert!(Operator::try_from(0u8).is_err());
+    }
+
+    #[test]
+    fn k101_invalid_input() {
+        for code in 45..=254 {
+            assert!(matches!(
+                deserialize(&[101, code], &mut 0, false),
+                Err(KolaError::NotSupportedKOperatorErr(value)) if value == code
+            ));
+        }
+        assert!(matches!(
+            deserialize(&[101], &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+    }
+
+    #[test]
+    fn k101_mixed_list() {
+        let bytes = [0, 0, 4, 0, 0, 0, 101, 25, 101, 0, 101, 255, 255, 1];
+        let expected = K::MixedList(vec![
+            K::Operator(Operator::try_from("sum").unwrap()),
+            K::Null,
+            K::Operator(Operator::try_from("::").unwrap()),
+            K::Boolean(true),
+        ]);
+        let mut pos = 0;
+        assert_eq!(deserialize(&bytes, &mut pos, false).unwrap(), expected);
+        assert_eq!(pos, bytes.len());
+        assert_eq!(expected.j6_len().unwrap(), bytes.len());
+        assert_eq!(serialize(&expected).unwrap(), bytes);
     }
 
     #[test]

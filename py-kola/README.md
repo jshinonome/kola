@@ -137,6 +137,22 @@ buffer = serialize_as_ipc_bytes6("sync", True, ["upd", "table", df])
 
 **`msg_type`**: `"async"` | `"sync"` | `"response"`
 
+Use the `Operator` enum to serialize K101 unary primitives:
+
+```python
+from kola import Operator, serialize_as_ipc_bytes6
+
+buffer = serialize_as_ipc_bytes6("sync", False, Operator.SUM)
+assert buffer[8:] == bytes([101, 25])
+```
+
+Operators also work as query arguments and inside lists and dictionaries.
+Members include `Operator.SUM`, `Operator.AVG`, `Operator.PLUS` (unary `+:`),
+and `Operator.PROJECTION_NULL` (`::`). The `.value` attribute holds the q name;
+`Operator("sum")` also resolves to `Operator.SUM`. Unknown names raise `ValueError`.
+Ordinary strings serialize as symbols; `None` serializes as generic null.
+Received K101 operators are returned as `Operator` enum members.
+
 ### Read Binary Table
 
 Read a kdb+ binary table (splayed/flat file) directly into a Polars DataFrame.
