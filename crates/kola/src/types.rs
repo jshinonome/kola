@@ -5,7 +5,6 @@ use polars::{
     prelude::{AnyValue, DataFrame, LargeListArray, TimeUnit},
     series::Series,
 };
-use polars_arrow::array::{FixedSizeListArray, ValueSize};
 use rayon::iter::ParallelIterator;
 use uuid::Uuid;
 
@@ -259,17 +258,16 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
         PolarsDataType::Int16 => Ok(length * 2 + 6),
         PolarsDataType::Int32 => Ok(length * 4 + 6),
         PolarsDataType::Int64 => Ok(length * 8 + 6),
-        PolarsDataType::UInt8 => Ok(length * 2 + 6),
+        PolarsDataType::UInt8 => Ok(length + 6),
         PolarsDataType::UInt16 => Ok(length * 4 + 6),
         PolarsDataType::UInt32 => Ok(length * 8 + 6),
         PolarsDataType::Float32 => Ok(length * 4 + 6),
         PolarsDataType::Float64 => Ok(length * 8 + 6),
         // to k datetime
         PolarsDataType::Datetime(_, _) => Ok(length * 8 + 6),
-        PolarsDataType::Date => Ok(length * 8 + 6),
+        PolarsDataType::Date => Ok(length * 4 + 6),
         // to time
-        // to timespan
-        PolarsDataType::Time => Ok(length * 8 + 6),
+        PolarsDataType::Time => Ok(length * 4 + 6),
         // to timespan
         PolarsDataType::Duration(_) => Ok(length * 8 + 6),
         // to string
@@ -277,15 +275,21 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
             let ptr = series.to_physical_repr();
             let array = ptr.str().unwrap();
             let str_size: usize = array.par_iter().map(|s| s.unwrap_or("").len()).sum();
-            Ok(array.get_values_size() * 6 + str_size)
+            Ok(str_size + 6 * length + 6)
         }
         PolarsDataType::List(data_type) => {
-            let array = series.chunks()[0]
-                .as_any()
-                .downcast_ref::<LargeListArray>()
-                .unwrap();
-            let length = array.offsets().len();
-            let values_length = array.len();
+            let values_length: usize = series
+                .chunks()
+                .iter()
+                .map(|array| {
+                    let offsets = array
+                        .as_any()
+                        .downcast_ref::<LargeListArray>()
+                        .unwrap()
+                        .offsets();
+                    (offsets.last() - offsets.first()) as usize
+                })
+                .sum();
             match data_type.as_ref() {
                 PolarsDataType::Boolean => Ok(values_length + 6 * length + 6),
                 PolarsDataType::UInt8 => Ok(values_length + 6 * length + 6),
@@ -300,11 +304,6 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
             }
         }
         PolarsDataType::Array(data_type, size) => {
-            let array = series.chunks()[0]
-                .as_any()
-                .downcast_ref::<FixedSizeListArray>()
-                .unwrap();
-            let length = array.len();
             match data_type.as_ref() {
                 PolarsDataType::Boolean => Ok((size + 6) * length + 6),
                 PolarsDataType::UInt8 => Ok((size + 6) * length + 6),
@@ -320,7 +319,7 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
         }
         PolarsDataType::Binary => {
             let array = series.binary().unwrap();
-            let is_16_fixed_binary = array.iter().any(|v| 16 == v.unwrap_or(&[]).len());
+            let is_16_fixed_binary = array.iter().all(|v| v.is_none_or(|v| 16 == v.len()));
             if is_16_fixed_binary {
                 Ok(16 * length + 6)
             } else {

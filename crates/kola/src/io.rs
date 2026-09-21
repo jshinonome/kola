@@ -81,11 +81,13 @@ pub fn generate_j6_ipc_msg(
     enable_compression: bool,
     k: K,
 ) -> Result<Vec<u8>, KolaError> {
-    let length = k.j6_len()?;
-    let mut vec: Vec<u8> = Vec::with_capacity(length + 8);
-    vec.write_all(&[1, msg_type as u8, 0, 0]).unwrap();
-    vec.write_all(&(length as u32 + 8).to_le_bytes()).unwrap();
-    vec.write_all(&serde6::serialize(&k)?).unwrap();
+    let body = serde6::serialize(&k)?;
+    let length = body.len() + 8;
+    let mut vec: Vec<u8> = Vec::with_capacity(length);
+    let length_ext = (length >> 32) as u8;
+    vec.write_all(&[1, msg_type as u8, 0, length_ext]).unwrap();
+    vec.write_all(&(length as u32).to_le_bytes()).unwrap();
+    vec.write_all(&body).unwrap();
     if enable_compression {
         Ok(serde6::compress(vec))
     } else {

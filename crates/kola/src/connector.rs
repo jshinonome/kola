@@ -49,12 +49,29 @@ impl rustls::client::danger::ServerCertVerifier for NoCertVerifier {
 }
 
 pub(crate) trait QStream: IoRead + IoWrite {
-    fn shutdown(&self, how: Shutdown) -> io::Result<()>;
+    fn shutdown(&mut self, how: Shutdown) -> io::Result<()>;
 }
 
-impl<S: IoRead + IoWrite> QStream for S {
-    fn shutdown(&self, _how: Shutdown) -> io::Result<()> {
-        Ok(())
+// the peer may have closed the connection already
+fn ignore_not_connected(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(e) if e.kind() == io::ErrorKind::NotConnected => Ok(()),
+        result => result,
+    }
+}
+
+impl QStream for TcpStream {
+    fn shutdown(&mut self, how: Shutdown) -> io::Result<()> {
+        ignore_not_connected(TcpStream::shutdown(self, how))
+    }
+}
+
+impl QStream for StreamOwned<rustls::ClientConnection, TcpStream> {
+    fn shutdown(&mut self, how: Shutdown) -> io::Result<()> {
+        self.conn.send_close_notify();
+        // best effort, the socket is closed anyway
+        let _ = self.flush();
+        ignore_not_connected(self.sock.shutdown(how))
     }
 }
 
@@ -193,7 +210,13 @@ impl Connector {
                         vectors.into_iter().for_each(|v| {
                             let _ = orignal_vec.write_all(&v);
                         });
-                        stream.write_all(&compress(orignal_vec))?
+                        match stream.write_all(&compress(orignal_vec)) {
+                            Ok(_) => (),
+                            Err(e) => {
+                                self.shutdown()?;
+                                return Err(KolaError::IOError(e));
+                            }
+                        }
                     };
                     Ok(())
                 }
@@ -224,6 +247,13 @@ impl Connector {
                 let compression_mode = header[2];
                 let mut length = u32::from_le_bytes(header[4..].try_into().unwrap()) as usize;
                 length += (header[3] as usize) << 32;
+                if length < 8 {
+                    self.shutdown()?;
+                    return Err(KolaError::DeserializationErr(format!(
+                        "Invalid message length {}",
+                        length
+                    )));
+                }
                 let mut vec: Vec<u8> = vec![0u8; length - 8];
                 match stream.read_exact(&mut vec) {
                     Ok(_) => (),
@@ -232,13 +262,36 @@ impl Connector {
                         return Err(KolaError::IOError(e));
                     }
                 };
+                // uncompressed length
+                let length_size = match compression_mode {
+                    1 => 4,
+                    2 => 8,
+                    _ => 0,
+                };
+                if vec.len() < length_size {
+                    return Err(KolaError::DeserializationErr(
+                        "Invalid compressed message".to_string(),
+                    ));
+                }
                 if compression_mode == 1 {
                     length = u32::from_le_bytes(vec[..4].try_into().unwrap()) as usize;
+                    if length < 8 {
+                        return Err(KolaError::DeserializationErr(format!(
+                            "Invalid uncompressed message length {}",
+                            length
+                        )));
+                    }
                     let mut de_vec = vec![0u8; length - 8];
                     decompress(&vec, &mut de_vec, 4);
                     deserialize(&de_vec, &mut 0, false)
                 } else if compression_mode == 2 {
                     length = u64::from_le_bytes(vec[..8].try_into().unwrap()) as usize;
+                    if length < 8 {
+                        return Err(KolaError::DeserializationErr(format!(
+                            "Invalid uncompressed message length {}",
+                            length
+                        )));
+                    }
                     let mut de_vec = vec![0u8; length - 8];
                     decompress(&vec, &mut de_vec, 8);
                     deserialize(&de_vec, &mut 0, false)
@@ -264,17 +317,21 @@ impl Connector {
                     Err(e) => return Err(KolaError::IOError(e)),
                 }
             } else {
-                let addr = socket.to_socket_addrs().map_err(KolaError::IOError)?.next();
-                if addr.is_none() {
-                    return Err(KolaError::FailedToConnectErr(format!(
-                        "Failed to connect to {}",
-                        socket
-                    )));
+                // try every resolved address, same as TcpStream::connect
+                let mut result = Err(KolaError::FailedToConnectErr(format!(
+                    "Failed to connect to {}",
+                    socket
+                )));
+                for addr in socket.to_socket_addrs().map_err(KolaError::IOError)? {
+                    match TcpStream::connect_timeout(&addr, self.timeout) {
+                        Ok(stream) => {
+                            result = Ok(stream);
+                            break;
+                        }
+                        Err(e) => result = Err(KolaError::IOError(e)),
+                    }
                 }
-                match TcpStream::connect_timeout(&addr.unwrap(), self.timeout) {
-                    Ok(stream) => stream,
-                    Err(e) => return Err(KolaError::IOError(e)),
-                }
+                result?
             };
             tcp_stream.set_nodelay(true)?;
             if !self.timeout.is_zero() {
@@ -294,10 +351,7 @@ impl Connector {
                 .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
                 .with_no_client_auth();
                 let server_name = ServerName::try_from(self.host.as_str())
-                    .unwrap_or_else(|_| {
-                        let ip: std::net::IpAddr = self.host.parse().expect("invalid host");
-                        ServerName::IpAddress(ip.into())
-                    })
+                    .map_err(|_| KolaError::Err(format!("Invalid host {}", self.host)))?
                     .to_owned();
                 let conn = rustls::ClientConnection::new(Arc::new(config), server_name)
                     .map_err(|e| KolaError::Err(e.to_string()))?;
@@ -314,7 +368,7 @@ impl Connector {
     }
 
     pub fn shutdown(&mut self) -> Result<(), KolaError> {
-        if let Some(stream) = &self.stream {
+        if let Some(stream) = &mut self.stream {
             match stream.shutdown(Shutdown::Both) {
                 Err(e) => {
                     self.stream = None;
@@ -350,6 +404,14 @@ impl Connector {
 mod tests {
     use super::*;
     use rustls::client::danger::ServerCertVerifier;
+
+    #[test]
+    fn tls_server_name_accepts_ip_and_rejects_invalid_host() {
+        assert!(ServerName::try_from("localhost").is_ok());
+        assert!(ServerName::try_from("127.0.0.1").is_ok());
+        assert!(ServerName::try_from("::1").is_ok());
+        assert!(ServerName::try_from("invalid host").is_err());
+    }
 
     #[test]
     fn tls_client_config_builds_without_panic() {
