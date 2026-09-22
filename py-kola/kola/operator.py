@@ -2,9 +2,9 @@ from enum import Enum
 
 
 class Operator(Enum):
-    """q unary primitives (IPC type 101); values are their q names.
+    """q primitives (IPC types 101 and 102); values are their q names.
 
-    PLUS represents unary +:, not the binary + operator (type 102).
+    PLUS represents unary +:; BINARY_PLUS represents binary +.
     Generic null is represented by None, separately from PROJECTION_NULL.
     """
 
@@ -53,3 +53,69 @@ class Operator(Enum):
     DEV = "dev"
     HOPEN = "hopen"
     PROJECTION_NULL = "::"
+
+    # K102 binary operators
+    ASSIGN = ":"
+    BINARY_PLUS = "+"
+    BINARY_MINUS = "-"
+    BINARY_MULTIPLY = "*"
+    BINARY_DIVIDE = "%"
+    BINARY_AND = "&"
+    BINARY_OR = "|"
+    BINARY_CARET = "^"
+    BINARY_EQUAL = "="
+    BINARY_LESS = "<"
+    BINARY_GREATER = ">"
+    BINARY_DOLLAR = "$"
+    BINARY_COMMA = ","
+    BINARY_HASH = "#"
+    BINARY_UNDERSCORE = "_"
+    BINARY_TILDE = "~"
+    BINARY_BANG = "!"
+    BINARY_QUESTION = "?"
+    BINARY_AT = "@"
+    BINARY_DOT = "."
+    BINARY_ZERO_COLON = "0:"
+    BINARY_ONE_COLON = "1:"
+    BINARY_TWO_COLON = "2:"
+    IN = "in"
+    WITHIN = "within"
+    LIKE = "like"
+    BIN = "bin"
+    SS = "ss"
+    INSERT = "insert"
+    WSUM = "wsum"
+    WAVG = "wavg"
+    DIV = "div"
+    XEXP = "xexp"
+    SETENV = "setenv"
+    BINR = "binr"
+    COV = "cov"
+    COR = "cor"
+    LSQ = "!"
+    MMU = "$"
+
+    # Named K101 aliases, verified against q 3.6 serialization.
+    FLIP = "+:"
+    NEG = "-:"
+    FIRST = "*:"
+    RECIPROCAL = "%:"
+    LTIME = "%:"
+    WHERE = "&:"
+    REVERSE = "|:"
+    NULL = "^:"
+    GROUP = "=:"
+    HCLOSE = ">:"
+    STRING = "$:"
+    COUNT = "#:"
+    FLOOR = "_:"
+    NOT = "~:"
+    HDEL = "~:"
+    KEY = "!:"
+    INV = "!:"
+    DISTINCT = "?:"
+    TYPE = "@:"
+    VALUE = ".:"
+    GET = ".:"
+    READ0 = "0::"
+    READ1 = "1::"

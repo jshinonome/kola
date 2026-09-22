@@ -329,15 +329,15 @@ pub fn deserialize(vec: &[u8], pos: &mut usize, is_column: bool) -> Result<K, Ko
                     .unwrap(),
             ))
         }
-        101 => {
+        101 | 102 => {
             let code = *vec.get(start_pos).ok_or_else(|| {
-                KolaError::DeserializationErr("Missing K101 operator code".to_owned())
+                KolaError::DeserializationErr(format!("Missing K{k_type} operator code"))
             })?;
             *pos += 1;
-            if code == 0 {
+            if k_type == 101 && code == 0 {
                 Ok(K::Null)
             } else {
-                Ok(K::Operator(Operator::try_from(code)?))
+                Ok(K::Operator(Operator::try_from((k_type, code))?))
             }
         }
         // q error
@@ -1269,7 +1269,7 @@ pub fn serialize(k: &K) -> Result<Vec<u8>, KolaError> {
             });
         }
         K::Operator(operator) => {
-            vec = vec![101, operator.code()];
+            vec = vec![operator.k_type(), operator.code()];
         }
         // to (::)
         K::Null => {
@@ -2877,6 +2877,94 @@ mod tests {
     }
 
     #[test]
+    fn k102_round_trip() {
+        let names = [
+            ":", "+", "-", "*", "%", "&", "|", "^", "=", "<", ">", "$", ",", "#", "_", "~", "!",
+            "?", "@", ".", "0:", "1:", "2:", "in", "within", "like", "bin", "ss", "insert", "wsum",
+            "wavg", "div", "xexp", "setenv", "binr", "cov", "cor",
+        ];
+        for (code, name) in names.into_iter().enumerate() {
+            let bytes = [102, code as u8];
+            let operator = Operator::try_from(name).unwrap();
+            assert_eq!(operator.k_type(), 102);
+            assert_eq!(operator.code(), code as u8);
+            assert_eq!(operator.as_str(), name);
+            let k = K::Operator(operator);
+            let mut pos = 0;
+            assert_eq!(deserialize(&bytes, &mut pos, false).unwrap(), k);
+            assert_eq!(pos, 2);
+            assert_eq!(k.j6_len().unwrap(), 2);
+            assert_eq!(serialize(&k).unwrap(), bytes);
+        }
+        for code in 37..=255 {
+            assert!(matches!(deserialize(&[102, code], &mut 0, false),
+                Err(KolaError::NotSupportedKOperatorErr(value)) if value == code));
+        }
+        assert!(matches!(
+            deserialize(&[102], &mut 0, false),
+            Err(KolaError::DeserializationErr(_))
+        ));
+    }
+
+    #[test]
+    fn unary_operator_aliases() {
+        for (name, code) in [
+            ("flip", 1),
+            ("neg", 2),
+            ("first", 3),
+            ("reciprocal", 4),
+            ("ltime", 4),
+            ("where", 5),
+            ("reverse", 6),
+            ("null", 7),
+            ("group", 8),
+            ("hclose", 10),
+            ("string", 11),
+            ("count", 13),
+            ("floor", 14),
+            ("not", 15),
+            ("hdel", 15),
+            ("key", 16),
+            ("inv", 16),
+            ("distinct", 17),
+            ("type", 18),
+            ("value", 19),
+            ("get", 19),
+            ("read0", 20),
+            ("read1", 21),
+        ] {
+            let operator = Operator::try_from(name).unwrap();
+            assert_eq!(serialize(&K::Operator(operator)).unwrap(), [101, code]);
+        }
+    }
+
+    #[test]
+    fn binary_keyword_aliases() {
+        for (name, code) in [("and", 5), ("or", 6), ("lsq", 16), ("mmu", 11)] {
+            let operator = Operator::try_from(name).unwrap();
+            assert_eq!(serialize(&K::Operator(operator)).unwrap(), [102, code]);
+        }
+    }
+
+    #[test]
+    fn k102_mixed_list() {
+        let bytes = [0, 0, 4, 0, 0, 0, 102, 0, 101, 0, 102, 1, 101, 1];
+        let mut pos = 0;
+        let k = deserialize(&bytes, &mut pos, false).unwrap();
+        assert_eq!(pos, bytes.len());
+        assert_eq!(
+            k,
+            K::MixedList(vec![
+                K::Operator(Operator::try_from(":").unwrap()),
+                K::Null,
+                K::Operator(Operator::try_from("+").unwrap()),
+                K::Operator(Operator::try_from("+:").unwrap()),
+            ])
+        );
+        assert_eq!(serialize(&k).unwrap(), bytes);
+    }
+
+    #[test]
     fn k101_names() {
         for (name, code) in [
             ("+:", 1),
@@ -2894,7 +2982,7 @@ mod tests {
             assert_eq!(operator.as_str(), name);
             assert_eq!(serialize(&K::Operator(operator)).unwrap(), [101, code]);
         }
-        assert!(Operator::try_from("+").is_err());
+        assert!(Operator::try_from("unknown").is_err());
         assert!(Operator::try_from(0u8).is_err());
     }
 
@@ -3207,7 +3295,10 @@ mod tests {
             98, 0, 99, 11, 0, 1, 0, 0, 0, 97, 0, 0, 0, 1, 0, 0, 0, 10, 0, 2, 0, 0, 0, 97, 233,
         ]
         .to_vec();
-        let df: DataFrame = deserialize(&vec, &mut 0, false).unwrap().try_into().unwrap();
+        let df: DataFrame = deserialize(&vec, &mut 0, false)
+            .unwrap()
+            .try_into()
+            .unwrap();
         let expect = Series::new("a".into(), ["a", "\u{FFFD}"]);
         assert_eq!(df.column("a").unwrap().as_materialized_series(), &expect);
         // ("a\351";"bc")
@@ -3215,7 +3306,10 @@ mod tests {
             0, 0, 2, 0, 0, 0, 10, 0, 2, 0, 0, 0, 97, 233, 10, 0, 2, 0, 0, 0, 98, 99,
         ]
         .to_vec();
-        let series: Series = deserialize(&vec, &mut 0, false).unwrap().try_into().unwrap();
+        let series: Series = deserialize(&vec, &mut 0, false)
+            .unwrap()
+            .try_into()
+            .unwrap();
         let expect = Series::new("string".into(), ["a\u{FFFD}", "bc"]);
         assert_eq!(series, expect);
     }

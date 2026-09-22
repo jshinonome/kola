@@ -267,7 +267,7 @@ fn cast_to_k(any: Bound<PyAny>) -> PyResult<K> {
         let value = any.getattr("value")?;
         let name = value.extract::<&str>()?;
         let operator = Operator::try_from(name)
-            .map_err(|_| PyValueError::new_err(format!("Unknown K101 operator: {name}")))?;
+            .map_err(|_| PyValueError::new_err(format!("Unknown K101/K102 operator: {name}")))?;
         Ok(K::Operator(operator))
     } else {
         Err(PythonErr(format!("Not supported python type {:?}", any.get_type(),)).into())

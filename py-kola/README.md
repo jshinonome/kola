@@ -137,7 +137,7 @@ buffer = serialize_as_ipc_bytes6("sync", True, ["upd", "table", df])
 
 **`msg_type`**: `"async"` | `"sync"` | `"response"`
 
-Use the `Operator` enum to serialize K101 unary primitives:
+Use the `Operator` enum to serialize K101 unary primitives and K102 operators:
 
 ```python
 from kola import Operator, serialize_as_ipc_bytes6
@@ -151,7 +151,40 @@ Members include `Operator.SUM`, `Operator.AVG`, `Operator.PLUS` (unary `+:`),
 and `Operator.PROJECTION_NULL` (`::`). The `.value` attribute holds the q name;
 `Operator("sum")` also resolves to `Operator.SUM`. Unknown names raise `ValueError`.
 Ordinary strings serialize as symbols; `None` serializes as generic null.
-Received K101 operators are returned as `Operator` enum members.
+Received K101 and K102 operators are returned as `Operator` enum members.
+
+K102 members include `Operator.BINARY_PLUS` (`+`), `Operator.IN`, `Operator.WAVG`,
+and `Operator.DIV`. For example:
+
+```python
+buffer = serialize_as_ipc_bytes6("sync", False, Operator.BINARY_PLUS)
+assert buffer[8:] == bytes([102, 1])
+```
+
+Named unary aliases include `Operator.FLIP`, `Operator.NEG`, `Operator.FIRST`,
+`Operator.COUNT`, `Operator.TYPE`, and `Operator.VALUE`. They retain the existing
+symbolic values: `Operator.FLIP is Operator.PLUS`, and both encode as `[101, 1]`.
+The mappings follow jkdb's K101/K102 lists; named unary aliases were checked
+against q 3.6. This does not claim exhaustive coverage across q versions.
+
+The 177 keywords on the [KX reference card](https://code.kx.com/q/ref/) were
+checked against q 3.6 on 2026-09-22. The per-keyword runtime type and serialized
+type are recorded in [test/q_keyword_types.json](test/q_keyword_types.json).
+Run `python scripts/check_q_keywords.py` from the repository root to repeat the
+check with your installed q version. The script resolves and serializes values
+without applying the functions.
+
+Of those keywords, 58 serialize directly as K101/K102 values. The others include
+lambdas, projections, compositions, derived functions, the `csv` character,
+and seven syntax keywords that cannot be resolved as standalone values.
+`Operator.LSQ` and `Operator.MMU` alias K102 `!` and `$`. Use `BINARY_AND` and
+`BINARY_OR` for the q keywords `and` and `or`; the original `AND` and `OR` enum
+members retain their unary `&:` and `|:` meanings.
+
+In q 3.6, `hopen`, `var`, `dev`, `cov`, and `cor` have primitive runtime types
+but serialize as compatibility lambdas. Their current enum encodings use the
+direct jkdb primitive codes and do not reproduce those lambda encodings.
+`<>`, `<=`, and `>=` serialize as K105 compositions and are not yet supported.
 
 ### Read Binary Table
 

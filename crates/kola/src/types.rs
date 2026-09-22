@@ -20,7 +20,14 @@ const K101_NAMES: [&str; 44] = [
     "var", "dev", "hopen",
 ];
 
-/// A q unary primitive (IPC type 101), including the projection null `::` (255).
+// K102 operators, following jkdb/src/ipc.js.
+const K102_NAMES: [&str; 37] = [
+    ":", "+", "-", "*", "%", "&", "|", "^", "=", "<", ">", "$", ",", "#", "_", "~", "!", "?", "@",
+    ".", "0:", "1:", "2:", "in", "within", "like", "bin", "ss", "insert", "wsum", "wavg", "div",
+    "xexp", "setenv", "binr", "cov", "cor",
+];
+
+/// A q unary primitive (101) or binary operator (102), including projection null.
 /// Generic null (0) is represented by [`K::Null`].
 ///
 /// ```
@@ -29,18 +36,24 @@ const K101_NAMES: [&str; 44] = [
 /// assert_eq!(sum.j6_len().unwrap(), 2);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Operator(u8);
+pub struct Operator(u8, u8);
 
 impl Operator {
     pub fn code(self) -> u8 {
+        self.1
+    }
+
+    pub fn k_type(self) -> u8 {
         self.0
     }
 
     pub fn as_str(self) -> &'static str {
-        if self.0 == 255 {
+        if self.0 == 102 {
+            K102_NAMES[self.1 as usize]
+        } else if self.1 == 255 {
             "::"
         } else {
-            K101_NAMES[self.0 as usize - 1]
+            K101_NAMES[self.1 as usize - 1]
         }
     }
 }
@@ -49,9 +62,18 @@ impl TryFrom<u8> for Operator {
     type Error = KolaError;
 
     fn try_from(code: u8) -> Result<Self, Self::Error> {
-        match code {
-            1..=44 | 255 => Ok(Self(code)),
-            _ => Err(KolaError::NotSupportedKOperatorErr(code)),
+        Self::try_from((101, code))
+    }
+}
+
+impl TryFrom<(u8, u8)> for Operator {
+    type Error = KolaError;
+
+    fn try_from((k_type, code): (u8, u8)) -> Result<Self, Self::Error> {
+        match (k_type, code) {
+            (101, 1..=44 | 255) | (102, 0..=36) => Ok(Self(k_type, code)),
+            (101 | 102, _) => Err(KolaError::NotSupportedKOperatorErr(code)),
+            _ => Err(KolaError::NotSupportedKTypeErr(k_type)),
         }
     }
 }
@@ -61,13 +83,55 @@ impl TryFrom<&str> for Operator {
 
     fn try_from(name: &str) -> Result<Self, Self::Error> {
         if name == "::" {
-            return Ok(Self(255));
+            return Ok(Self(101, 255));
+        }
+        let name = match name {
+            "and" => "&",
+            "or" => "|",
+            "lsq" => "!",
+            "mmu" => "$",
+            name => name,
+        };
+        let unary_code = match name {
+            "flip" => Some(1),
+            "neg" => Some(2),
+            "first" => Some(3),
+            "reciprocal" => Some(4),
+            "ltime" => Some(4),
+            "where" => Some(5),
+            "reverse" => Some(6),
+            "null" => Some(7),
+            "group" => Some(8),
+            "hclose" => Some(10),
+            "string" => Some(11),
+            "count" => Some(13),
+            "floor" => Some(14),
+            "not" => Some(15),
+            "hdel" => Some(15),
+            "key" => Some(16),
+            "inv" => Some(16),
+            "distinct" => Some(17),
+            "type" => Some(18),
+            "value" => Some(19),
+            "get" => Some(19),
+            "read0" => Some(20),
+            "read1" => Some(21),
+            _ => None,
+        };
+        if let Some(code) = unary_code {
+            return Ok(Self(101, code));
         }
         K101_NAMES
             .iter()
             .position(|&candidate| candidate == name)
-            .map(|index| Self(index as u8 + 1))
-            .ok_or_else(|| KolaError::NotAbleToSerializeErr(format!("K101 operator {name}")))
+            .map(|index| Self(101, index as u8 + 1))
+            .or_else(|| {
+                K102_NAMES
+                    .iter()
+                    .position(|&candidate| candidate == name)
+                    .map(|index| Self(102, index as u8))
+            })
+            .ok_or_else(|| KolaError::NotAbleToSerializeErr(format!("K101/K102 operator {name}")))
     }
 }
 
@@ -99,7 +163,7 @@ pub enum K {
     Series(Series),            // list, dictionaries
     DataFrame(DataFrame),      // table and keyed table
     Dict(IndexMap<String, K>), // dict, symbols -> atom or list
-    Operator(Operator),        // K101 unary primitive
+    Operator(Operator),        // K101/K102 primitive
     Null,
 }
 
@@ -303,20 +367,18 @@ pub(crate) fn get_series_len(series: &Series) -> Result<usize, KolaError> {
                 )),
             }
         }
-        PolarsDataType::Array(data_type, size) => {
-            match data_type.as_ref() {
-                PolarsDataType::Boolean => Ok((size + 6) * length + 6),
-                PolarsDataType::UInt8 => Ok((size + 6) * length + 6),
-                PolarsDataType::Int16 => Ok((2 * size + 6) * length + 6),
-                PolarsDataType::Int32 => Ok((4 * size + 6) * length + 6),
-                PolarsDataType::Int64 => Ok((8 * size + 6) * length + 6),
-                PolarsDataType::Float32 => Ok((4 * size + 6) * length + 6),
-                PolarsDataType::Float64 => Ok((8 * size + 6) * length + 6),
-                _ => Err(KolaError::NotSupportedSeriesTypeErr(
-                    data_type.as_ref().clone(),
-                )),
-            }
-        }
+        PolarsDataType::Array(data_type, size) => match data_type.as_ref() {
+            PolarsDataType::Boolean => Ok((size + 6) * length + 6),
+            PolarsDataType::UInt8 => Ok((size + 6) * length + 6),
+            PolarsDataType::Int16 => Ok((2 * size + 6) * length + 6),
+            PolarsDataType::Int32 => Ok((4 * size + 6) * length + 6),
+            PolarsDataType::Int64 => Ok((8 * size + 6) * length + 6),
+            PolarsDataType::Float32 => Ok((4 * size + 6) * length + 6),
+            PolarsDataType::Float64 => Ok((8 * size + 6) * length + 6),
+            _ => Err(KolaError::NotSupportedSeriesTypeErr(
+                data_type.as_ref().clone(),
+            )),
+        },
         PolarsDataType::Binary => {
             let array = series.binary().unwrap();
             let is_16_fixed_binary = array.iter().all(|v| v.is_none_or(|v| 16 == v.len()));

@@ -1,0 +1,1074 @@
+{
+  "source": "https://code.kx.com/q/ref/",
+  "q_version": "3.6",
+  "keywords": [
+    {
+      "name": "abs",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 31
+    },
+    {
+      "name": "acos",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 38
+    },
+    {
+      "name": "aj",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "aj0",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ajf",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ajf0",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "all",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": "and",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 5
+    },
+    {
+      "name": "any",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": "asc",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "asin",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 36
+    },
+    {
+      "name": "asof",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "atan",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 40
+    },
+    {
+      "name": "attr",
+      "q_type": 104,
+      "wire_type": 104,
+      "code": null
+    },
+    {
+      "name": "avg",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 23
+    },
+    {
+      "name": "avgs",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "bin",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 26
+    },
+    {
+      "name": "binr",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 34
+    },
+    {
+      "name": "ceiling",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": "cols",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "cor",
+      "q_type": 102,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "cos",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 37
+    },
+    {
+      "name": "count",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 13
+    },
+    {
+      "name": "cov",
+      "q_type": 102,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "cross",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "csv",
+      "q_type": -10,
+      "wire_type": 246,
+      "code": 44
+    },
+    {
+      "name": "cut",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "delete",
+      "error": "from"
+    },
+    {
+      "name": "deltas",
+      "q_type": 109,
+      "wire_type": 109,
+      "code": null
+    },
+    {
+      "name": "desc",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "dev",
+      "q_type": 101,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "differ",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": "distinct",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 17
+    },
+    {
+      "name": "div",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 31
+    },
+    {
+      "name": "do",
+      "error": "do"
+    },
+    {
+      "name": "dsave",
+      "q_type": 110,
+      "wire_type": 110,
+      "code": null
+    },
+    {
+      "name": "each",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ej",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ema",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "enlist",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 41
+    },
+    {
+      "name": "eval",
+      "q_type": 104,
+      "wire_type": 104,
+      "code": null
+    },
+    {
+      "name": "except",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "exec",
+      "error": "from"
+    },
+    {
+      "name": "exit",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 29
+    },
+    {
+      "name": "exp",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 34
+    },
+    {
+      "name": "fby",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "fills",
+      "q_type": 108,
+      "wire_type": 108,
+      "code": null
+    },
+    {
+      "name": "first",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 3
+    },
+    {
+      "name": "fkeys",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "flip",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 1
+    },
+    {
+      "name": "floor",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 14
+    },
+    {
+      "name": "get",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 19
+    },
+    {
+      "name": "getenv",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 30
+    },
+    {
+      "name": "group",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 8
+    },
+    {
+      "name": "gtime",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "hclose",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 10
+    },
+    {
+      "name": "hcount",
+      "q_type": 104,
+      "wire_type": 104,
+      "code": null
+    },
+    {
+      "name": "hdel",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 15
+    },
+    {
+      "name": "hopen",
+      "q_type": 101,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "hsym",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": "iasc",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "idesc",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "if",
+      "error": "if"
+    },
+    {
+      "name": "ij",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ijf",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "in",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 23
+    },
+    {
+      "name": "insert",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 28
+    },
+    {
+      "name": "inter",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "inv",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 16
+    },
+    {
+      "name": "key",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 16
+    },
+    {
+      "name": "keys",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "last",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 24
+    },
+    {
+      "name": "like",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 25
+    },
+    {
+      "name": "lj",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ljf",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "load",
+      "q_type": 106,
+      "wire_type": 106,
+      "code": null
+    },
+    {
+      "name": "log",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 33
+    },
+    {
+      "name": "lower",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "lsq",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 16
+    },
+    {
+      "name": "ltime",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 4
+    },
+    {
+      "name": "ltrim",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "mavg",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "max",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 28
+    },
+    {
+      "name": "maxs",
+      "q_type": 108,
+      "wire_type": 108,
+      "code": null
+    },
+    {
+      "name": "mcount",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "md5",
+      "q_type": 104,
+      "wire_type": 104,
+      "code": null
+    },
+    {
+      "name": "mdev",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "med",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "meta",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "min",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 27
+    },
+    {
+      "name": "mins",
+      "q_type": 108,
+      "wire_type": 108,
+      "code": null
+    },
+    {
+      "name": "mmax",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "mmin",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "mmu",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 11
+    },
+    {
+      "name": "mod",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "msum",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "neg",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 2
+    },
+    {
+      "name": "next",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "not",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 15
+    },
+    {
+      "name": "null",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 7
+    },
+    {
+      "name": "or",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 6
+    },
+    {
+      "name": "over",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "parse",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "peach",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "pj",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "prd",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 26
+    },
+    {
+      "name": "prds",
+      "q_type": 108,
+      "wire_type": 108,
+      "code": null
+    },
+    {
+      "name": "prev",
+      "q_type": 109,
+      "wire_type": 109,
+      "code": null
+    },
+    {
+      "name": "prior",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "rand",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "rank",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ratios",
+      "q_type": 109,
+      "wire_type": 109,
+      "code": null
+    },
+    {
+      "name": "raze",
+      "q_type": 107,
+      "wire_type": 107,
+      "code": null
+    },
+    {
+      "name": "read0",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 20
+    },
+    {
+      "name": "read1",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 21
+    },
+    {
+      "name": "reciprocal",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 4
+    },
+    {
+      "name": "reval",
+      "q_type": 104,
+      "wire_type": 104,
+      "code": null
+    },
+    {
+      "name": "reverse",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 6
+    },
+    {
+      "name": "rload",
+      "q_type": 106,
+      "wire_type": 106,
+      "code": null
+    },
+    {
+      "name": "rotate",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "rsave",
+      "q_type": 106,
+      "wire_type": 106,
+      "code": null
+    },
+    {
+      "name": "rtrim",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "save",
+      "q_type": 106,
+      "wire_type": 106,
+      "code": null
+    },
+    {
+      "name": "scan",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "scov",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "sdev",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "select",
+      "error": "from"
+    },
+    {
+      "name": "set",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "setenv",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 33
+    },
+    {
+      "name": "show",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "signum",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "sin",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 35
+    },
+    {
+      "name": "sqrt",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 32
+    },
+    {
+      "name": "ss",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 27
+    },
+    {
+      "name": "ssr",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "string",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 11
+    },
+    {
+      "name": "sublist",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "sum",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 25
+    },
+    {
+      "name": "sums",
+      "q_type": 108,
+      "wire_type": 108,
+      "code": null
+    },
+    {
+      "name": "sv",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "svar",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "system",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": "tables",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "tan",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 39
+    },
+    {
+      "name": "til",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "trim",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "type",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 18
+    },
+    {
+      "name": "uj",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ujf",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "ungroup",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "union",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": "update",
+      "error": "from"
+    },
+    {
+      "name": "upper",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "upsert",
+      "q_type": 104,
+      "wire_type": 104,
+      "code": null
+    },
+    {
+      "name": "value",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 19
+    },
+    {
+      "name": "var",
+      "q_type": 101,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "view",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "views",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "vs",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "wavg",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 30
+    },
+    {
+      "name": "where",
+      "q_type": 101,
+      "wire_type": 101,
+      "code": 5
+    },
+    {
+      "name": "while",
+      "error": "while"
+    },
+    {
+      "name": "within",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 24
+    },
+    {
+      "name": "wj",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "wj1",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "wsum",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 29
+    },
+    {
+      "name": "xasc",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xbar",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xcol",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xcols",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xdesc",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xexp",
+      "q_type": 102,
+      "wire_type": 102,
+      "code": 32
+    },
+    {
+      "name": "xgroup",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xkey",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xlog",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xprev",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "xrank",
+      "q_type": 100,
+      "wire_type": 100,
+      "code": null
+    },
+    {
+      "name": "<>",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": "<=",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    },
+    {
+      "name": ">=",
+      "q_type": 105,
+      "wire_type": 105,
+      "code": null
+    }
+  ],
+  "checked_date": "2026-09-22",
+  "scope": "177 reference-card keywords plus <>, <=, >=; observed with q 3.6, not a cross-version guarantee"
+}
